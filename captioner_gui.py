@@ -24,14 +24,14 @@ class InputDeviceCaps:
         return f"InputDeviceCaps(channels={self.channels}, samplerate={self.samplerate}, index={self.index})"
 
 class InputDeviceInfo:
-    def __init__(self, name: str, api: str, latency: float, caps: InputDeviceCaps):
+    def __init__(self, name: str, api: str, block_dur: float, caps: InputDeviceCaps):
         self.name = name
         self.api = api
         self.channels = caps.channels
         self.samplerate = caps.samplerate
         self.min_latency = caps.min_latency
         self.max_latency = caps.max_latency
-        self.latency = latency
+        self.block_dur = block_dur
         self.index = caps.index
 
 def sort_api_by_preference(api_list):
@@ -219,21 +219,21 @@ class CaptionerUI:
         self.input_dev_info_label_1 = ttk.Label(root, text="", relief="solid", justify="left", anchor="nw")
         self.input_dev_info_label_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
-        # For latency
-        latency_frame = tk.Frame(root)
-        latency_frame.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
-        latency_frame.columnconfigure(0, weight=1)
-        latency_frame.rowconfigure(0, weight=1)
-        latency_frame.rowconfigure(1, weight=1)
+        # For block duration / size
+        block_frame = tk.Frame(root)
+        block_frame.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+        block_frame.columnconfigure(0, weight=1)
+        block_frame.rowconfigure(0, weight=1)
+        block_frame.rowconfigure(1, weight=1)
 
         # Label
-        self.audio_device_latency_label_1 = ttk.Label(latency_frame, text="Latency: \nBlock size: ", relief="solid", justify="left", anchor="w")
-        self.audio_device_latency_label_1.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_label_1 = ttk.Label(block_frame, text="Block duration: \nBlock size: ", relief="solid", justify="left", anchor="w")
+        self.audio_device_block_dur_label_1.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
         # Slider
-        self.audio_device_latency_slider_var_1 = tk.DoubleVar(value=0.5)
-        self.audio_device_latency_slider_1 = tk.Scale(latency_frame, from_=0.1, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_latency_slider_var_1, command=self.on_audio_device_1_latency_change)
-        self.audio_device_latency_slider_1.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_var_1 = tk.DoubleVar(value=0.5)
+        self.audio_device_block_dur_slider_1 = tk.Scale(block_frame, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_block_dur_slider_var_1, command=self.on_audio_device_1_block_dur_change)
+        self.audio_device_block_dur_slider_1.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
 
         # Now set the combo selection changed callback and select the default audio device.
         self.audio_device_combo_1.set(dev_name)
@@ -274,21 +274,21 @@ class CaptionerUI:
         self.input_dev_info_label_2 = ttk.Label(root, text="", relief="solid", justify="left", anchor="nw", state="disabled")
         self.input_dev_info_label_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
-        # For latency
-        latency_frame_2 = tk.Frame(root)
-        latency_frame_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
-        latency_frame_2.columnconfigure(0, weight=1)
-        latency_frame_2.rowconfigure(0, weight=1)
-        latency_frame_2.rowconfigure(1, weight=1)
+        # For block duration / size
+        block_frame_2 = tk.Frame(root)
+        block_frame_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+        block_frame_2.columnconfigure(0, weight=1)
+        block_frame_2.rowconfigure(0, weight=1)
+        block_frame_2.rowconfigure(1, weight=1)
 
         # Label
-        self.audio_device_latency_label_2 = ttk.Label(latency_frame_2, text="Latency: \nBlock size: ", relief="solid", justify="left", anchor="w", state="disabled")
-        self.audio_device_latency_label_2.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_label_2 = ttk.Label(block_frame_2, text="Block duration: \nBlock size: ", relief="solid", justify="left", anchor="w", state="disabled")
+        self.audio_device_block_dur_label_2.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
         # Slider
-        self.audio_device_latency_slider_var_2 = tk.DoubleVar(value=0.5)
-        self.audio_device_latency_slider_2 = tk.Scale(latency_frame_2, from_=0.1, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_latency_slider_var_2, command=self.on_audio_device_2_latency_change, state="disabled")
-        self.audio_device_latency_slider_2.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_var_2 = tk.DoubleVar(value=0.5)
+        self.audio_device_block_dur_slider_2 = tk.Scale(block_frame_2, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_block_dur_slider_var_2, command=self.on_audio_device_2_block_dur_change, state="disabled")
+        self.audio_device_block_dur_slider_2.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
 
         # Now set the combo selection changed callback and select the default audio device.
         self.audio_device_combo_2.set(dev_name)
@@ -364,17 +364,17 @@ class CaptionerUI:
 
         # --- Buttons ---
         buttons_frame = tk.Frame(root)
-        buttons_frame.grid(row=row_idx, rowspan=2, column=3, columnspan=2)
+        buttons_frame.grid(row=0, rowspan=2, column=4, columnspan=2)
 
         row_idx = self.next_row()
         self.start_btn = ttk.Button(buttons_frame, text="Start", command=self.start)
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
-        self.start_btn.grid(row=1, column=0, sticky="e", padx=5, pady=10)
-        self.quit_btn.grid(row=1, column=1, sticky="e", padx=5, pady=10)
+        self.start_btn.grid(row=0, column=0, sticky="e", padx=5, pady=10)
+        self.quit_btn.grid(row=1, column=0, sticky="e", padx=5, pady=10)
 
-        # Update latency labels
-        self.on_audio_device_1_latency_change(None)
-        self.on_audio_device_2_latency_change(None)
+        # Update block duration / size labels
+        self.on_audio_device_1_block_dur_change(None)
+        self.on_audio_device_2_block_dur_change(None)
 
         # make second column expand
         root.columnconfigure(1, weight=1)
@@ -456,16 +456,16 @@ class CaptionerUI:
             self.audio_device_host_api_combo_2.config(state="readonly")
             self.audio_device_channels_combo_2.config(state="readonly")
             self.audio_device_resample_check_2.config(state="normal")
-            self.audio_device_latency_label_2.config(state="readonly")
-            self.audio_device_latency_slider_2.config(state="normal")
+            self.audio_device_block_dur_label_2.config(state="readonly")
+            self.audio_device_block_dur_slider_2.config(state="normal")
         else:
             self.audio_device_combo_2.config(state="disabled")
             self.input_dev_info_label_2.config(state="disabled")
             self.audio_device_host_api_combo_2.config(state="disabled")
             self.audio_device_channels_combo_2.config(state="disabled")
             self.audio_device_resample_check_2.config(state="disabled")
-            self.audio_device_latency_label_2.config(state="disabled")
-            self.audio_device_latency_slider_2.config(state="disabled")
+            self.audio_device_block_dur_label_2.config(state="disabled")
+            self.audio_device_block_dur_slider_2.config(state="disabled")
 
     def on_audio_device_1_selection_change(self, event):
         dev_name = self.audio_device_combo_1.get()
@@ -505,23 +505,23 @@ class CaptionerUI:
         )
         self.input_dev_info_label_2.config(text=info_text)
 
-    def on_audio_device_1_latency_change(self, value):
+    def on_audio_device_1_block_dur_change(self, value):
         dev_info = self.get_selected_device_info(1)
-        block_size = dev_info.samplerate * dev_info.latency
+        block_size = dev_info.samplerate * dev_info.block_dur
         info_text = (
-            f"Latency: {dev_info.latency: .2f} s\n"
+            f"Block duration: {dev_info.block_dur: .2f} s\n"
             f"Block size: {int(block_size)} frames"
         )
-        self.audio_device_latency_label_1.config(text=info_text)
+        self.audio_device_block_dur_label_1.config(text=info_text)
 
-    def on_audio_device_2_latency_change(self, value):
+    def on_audio_device_2_block_dur_change(self, value):
         dev_info = self.get_selected_device_info(2)
-        block_size = dev_info.samplerate * dev_info.latency
+        block_size = dev_info.samplerate * dev_info.block_dur
         info_text = (
-            f"Latency: {dev_info.latency: .2f} s\n"
+            f"Block duration: {dev_info.block_dur: .2f} s\n"
             f"Block size: {int(block_size)} frames"
         )
-        self.audio_device_latency_label_2.config(text=info_text)
+        self.audio_device_block_dur_label_2.config(text=info_text)
 
     # Helper to manage grid row indices
     def next_row(self):
@@ -534,7 +534,7 @@ class CaptionerUI:
         api = self.audio_device_host_api_combo_1.get() if dev_num == 1 else self.audio_device_host_api_combo_2.get()
         ch = self.audio_device_channels_var_1.get() if dev_num == 1 else self.audio_device_channels_var_2.get()
         resample = self.audio_device_resample_var_1.get() if dev_num == 1 else self.audio_device_resample_var_2.get()
-        latency = self.audio_device_latency_slider_var_1.get() if dev_num == 1 else self.audio_device_latency_slider_var_2.get()
+        block_dur = self.audio_device_block_dur_slider_var_1.get() if dev_num == 1 else self.audio_device_block_dur_slider_var_2.get()
 
         import copy
         caps = copy.copy(self.device_map[name][api])
@@ -543,7 +543,7 @@ class CaptionerUI:
         if not resample:
             caps.samplerate = 16000.0
 
-        return InputDeviceInfo(name, api, latency, caps)
+        return InputDeviceInfo(name, api, block_dur, caps)
 
     def run_captioner(self):
         self.audio_queue = queue.Queue()
@@ -659,8 +659,8 @@ class AudioListener:
 
         self.device_rate = int(input_device_info.samplerate)
         self.device_channels = input_device_info.channels
-        self.in_stream_latency = input_device_info.latency
-        self.blocksize = int(self.device_rate * self.in_stream_latency)
+        self.in_stream_block_dur = input_device_info.block_dur
+        self.blocksize = int(self.device_rate * self.in_stream_block_dur)
 
         self.audio_queue = queue.Queue()
         self.result_queue = result_queue
@@ -724,7 +724,7 @@ class AudioListener:
             f"  API: {self.input_device_info.api}\n"
             f"  Channels: {self.device_channels}\n"
             f"  Samplerate: {self.device_rate}\n"
-            f"  Blocksize: {self.blocksize} frames (latency ~{self.in_stream_latency} s)"
+            f"  Blocksize: {self.blocksize} frames (block duration: ~{self.in_stream_block_dur} s)"
         )
         print(print_info, flush=True)
 

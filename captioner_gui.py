@@ -590,7 +590,7 @@ class CaptionerUI:
         self.whisper_client_thread.start()
 
     def run_captions_overlay(self):
-        self.captions_overlay = CaptionsOverlay(self.root_wnd, self.resuts_queue, self.gui_queue)
+        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.resuts_queue, self.gui_queue)
         self.captions_overlay.start()
 
     def run_audio_listener(self):
@@ -940,7 +940,7 @@ class WhisperClient:
         self.audio_queue.put(None)
 
 
-class CaptionsOverlay:
+class CaptionsReceiver:
     font_size = 18
 
     def __init__(self, root_wnd, source_queue, gui_queue):

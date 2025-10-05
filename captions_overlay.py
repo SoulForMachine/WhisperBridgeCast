@@ -41,6 +41,15 @@ class CaptionsOverlay:
         self.canvas = tk.Canvas(self.overlay_wnd, bg="black", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
+        # Two buttons centered
+        #button_frame = tk.Frame(self.overlay_wnd)
+#
+        #font_inc = tk.Button(button_frame, text="⇧", fg="white", bg="black", command=self.increase_font_size)
+        #font_dec = tk.Button(button_frame, text="⇩", fg="white", bg="black", command=self.decrease_font_size)
+        #font_inc.pack(side="left", padx=5)
+        #font_dec.pack(side="left", padx=5)
+        #button_frame.place(relx=0.5, rely=1.0, anchor="s")
+
         # Internal state
         self.visual_lines = []  # [{"lines": [canvas_ids], "y": y, "height": pixels}]
         self.pending_text = None  # text waiting to be added
@@ -75,6 +84,27 @@ class CaptionsOverlay:
         self.width = width
         self.height = height
         self.line_height = line_height
+#
+#    # --- Font size ---
+#    def increase_font_size(self):
+#        if self.font_size < 42:
+#            bc_pt_x, bc_pt_y = self.get_anchor_pt()
+#
+#            self.font_size += 2
+#            self.label.config(font=("Arial", self.font_size))
+#            self.overlay_wnd.update_idletasks()
+#
+#            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
+#
+#    def decrease_font_size(self):
+#        if self.font_size > 12:
+#            bc_pt_x, bc_pt_y = self.get_anchor_pt()
+#
+#            self.font_size -= 2
+#            self.label.config(font=("Arial", self.font_size))
+#            self.overlay_wnd.update_idletasks()
+#
+#            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
 
     # --- Text wrapping ---
     def wrap_text(self, text):
@@ -110,6 +140,9 @@ class CaptionsOverlay:
             self.visual_lines = self.visual_lines[:-1]
         # Add new text (may scroll old lines if needed)
         self.add_text(text)
+
+    def destroy(self):
+        self.overlay_wnd.destroy()
 
     # --- Internal ---
     def _process_new_text(self, text):
@@ -158,7 +191,6 @@ class CaptionsOverlay:
         frame_delay = 20  # ms
         # Compute scroll step in pixels per frame
         scroll_step = max(1, self.scroll_speed * frame_delay / 1000)
-        print(scroll_step)
 
         # Scroll all old lines up
         for vl in self.visual_lines:

@@ -9,6 +9,7 @@ from tkinter import ttk
 import logging
 import captioner_common as ccmn
 from collections import defaultdict
+import captions_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ class CaptionerUI:
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
         self.audio_queue = None
-        self.resuts_queue = None
+        self.results_queue = None
         self.whisper_client = None
         self.whisper_client_thread = None
         self.captions_overlay = None
@@ -549,7 +550,7 @@ class CaptionerUI:
 
     def run_captioner(self):
         self.audio_queue = queue.Queue()
-        self.resuts_queue = queue.Queue()
+        self.results_queue = queue.Queue()
         self.connect_to_server()
         self.run_audio_listener()
 
@@ -587,12 +588,12 @@ class CaptionerUI:
             "vad": self.vad_var.get(),
         }
 
-        self.whisper_client = WhisperClient(self.server_url_var.get().strip(), port, params, self.audio_queue, self.resuts_queue)
+        self.whisper_client = WhisperClient(self.server_url_var.get().strip(), port, params, self.audio_queue, self.results_queue)
         self.whisper_client_thread = threading.Thread(target=self.whisper_client.run)
         self.whisper_client_thread.start()
 
     def run_captions_overlay(self):
-        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.resuts_queue, self.gui_queue)
+        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
         self.captions_overlay.start()
 
     def run_audio_listener(self):
@@ -643,7 +644,7 @@ class CaptionerUI:
             self.captions_overlay = None
 
         self.audio_queue = None
-        self.resuts_queue = None
+        self.results_queue = None
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
 
@@ -899,64 +900,9 @@ class CaptionsReceiver:
         self.gui_queue = gui_queue
         self.captions_thread = None
         self.is_running = False
+        self.last_partial = False
 
-        # Tkinter window for captions
-        self.overlay_wnd = tk.Toplevel(root_wnd)
-        self.overlay_wnd.title("Live Captions")
-        self.overlay_wnd.configure(bg="black")
-        self.overlay_wnd.attributes("-topmost", True)
-        self.overlay_wnd.attributes("-alpha", 0.8)
-        self.overlay_wnd.overrideredirect(True)   # remove title bar and border
-
-        self.label = tk.Label(self.overlay_wnd, text="", fg="white", bg="black", font=("Arial", self.font_size), wraplength=800, anchor="w", justify="left")
-        self.label.pack(padx=20, pady=20)
-
-        self.button_frame = tk.Frame(self.overlay_wnd)
-        self.button_frame.pack(side="bottom", padx=0, pady=0)
-
-        # Three buttons centered
-        font_inc = tk.Button(self.button_frame, text="⇧", fg="white", bg="black", command=self.increase_font_size)
-        font_dec = tk.Button(self.button_frame, text="⇩", fg="white", bg="black", command=self.decrease_font_size)
-        font_inc.pack(side="left", padx=0)
-        font_dec.pack(side="left", padx=0)
-
-        self.sentences = []
-        self.incomplete_sentence = ""
-        self.displ_text = ""
-
-        self.overlay_wnd.bind("<Button-1>", self.start_move)
-        self.overlay_wnd.bind("<B1-Motion>", self.do_move)
-        self.start_x = 0
-        self.start_y = 0
-
-        btn = tk.Button(self.button_frame, text="X", fg="white", bg="black", command=self.overlay_wnd.destroy)
-        #btn.place(relx=1.0, y=0, anchor="s") # anchor to top-right corner
-        btn.pack(side="left", padx=0)
-
-        # get window and screen sizes
-        self.overlay_wnd.update_idletasks()
-        win_w = self.overlay_wnd.winfo_width()
-        win_h = self.overlay_wnd.winfo_height()
-        scr_w = self.overlay_wnd.winfo_screenwidth()
-        scr_h = self.overlay_wnd.winfo_screenheight()
-
-        # distance from bottom (pixels)
-        margin_bottom = 100  
-
-        # calculate position
-        x = (scr_w // 2) - (win_w // 2)    # center horizontally
-        y = scr_h - win_h - margin_bottom  # margin from bottom
-
-        self.overlay_wnd.geometry(f"+{x}+{y}")
-
-    def start_move(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
-
-    def do_move(self, event):
-        x = self.overlay_wnd.winfo_x() + (event.x - self.start_x)
-        y = self.overlay_wnd.winfo_y() + (event.y - self.start_y)
-        self.overlay_wnd.geometry(f"+{x}+{y}")
+        self.overlay = captions_overlay.CaptionsOverlay(root_wnd)
 
     def start(self):
         if not self.is_running:
@@ -973,24 +919,25 @@ class CaptionsReceiver:
                 continue
 
             if complete:
-                self.sentences.append(text) # add the complete sentence
-                self.incomplete_sentence = ""
+                self.gui_queue.put(lambda t=text: self.overlay.overlay_wnd.after(0, lambda t=t: self.send_complete(text=t)))
             else:
-                self.incomplete_sentence = text  # store the incomplete sentence
+                self.gui_queue.put(lambda t=text: self.overlay.overlay_wnd.after(0, lambda t=t: self.send_partial(text=t)))
 
-            self.sentences = self.sentences[-3:]  # keep only last 3 sentences
-            self.displ_text = "\n".join(self.sentences)
-            if self.incomplete_sentence:
-                if self.displ_text:
-                    self.displ_text += "\n"
-                self.displ_text += self.incomplete_sentence
+    def send_complete(self, text):
+        if self.overlay:
+            if self.last_partial:
+                self.overlay.set_last_text(text)
+                self.last_partial = False
+            else:
+                self.overlay.add_text(text)
 
-            if self.displ_text:
-                if self.displ_text and self.overlay_wnd is not None:
-                    try:
-                        self.gui_queue.put(lambda t=self.displ_text: self.overlay_wnd.after(0, lambda t=t: self.update_label(text=t)))
-                    except tk.TclError:
-                        pass
+    def send_partial(self, text):
+        if self.overlay:
+            if self.last_partial:
+                self.overlay.set_last_text(text)
+            else:
+                self.overlay.add_text(text)
+                self.last_partial = True
 
     def stop(self):
         if self.is_running:
@@ -998,55 +945,8 @@ class CaptionsReceiver:
             self.captions_thread.join()
             self.captions_thread = None
             self.is_running = False
-            self.overlay_wnd.destroy()
-            self.overlay_wnd = None
-
-    def get_anchor_pt(self):
-        # get current bottom center point
-        x = self.overlay_wnd.winfo_x()
-        y = self.overlay_wnd.winfo_y()
-        win_w = self.overlay_wnd.winfo_width()
-        win_h = self.overlay_wnd.winfo_height()
-        bc_pt_x = x + win_w // 2
-        bc_pt_y = y + win_h
-        return (bc_pt_x, bc_pt_y)
-    
-    def anchor_wnd_to_pt(self, pt_x, pt_y):
-        # keep bottom center point fixed
-        new_win_w = self.overlay_wnd.winfo_width()
-        new_win_h = self.overlay_wnd.winfo_height()
-        new_x = pt_x - new_win_w // 2
-        new_y = pt_y - new_win_h
-        self.overlay_wnd.geometry(f"+{new_x}+{new_y}")
-
-    def update_label(self, text):
-        if self.overlay_wnd:
-            bc_pt_x, bc_pt_y = self.get_anchor_pt()
-
-            self.label.config(text=text)
-            self.overlay_wnd.update_idletasks()
-
-            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
-
-    def increase_font_size(self):
-        if self.font_size < 42:
-            bc_pt_x, bc_pt_y = self.get_anchor_pt()
-
-            self.font_size += 2
-            self.label.config(font=("Arial", self.font_size))
-            self.overlay_wnd.update_idletasks()
-
-            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
-
-    def decrease_font_size(self):
-        if self.font_size > 12:
-            bc_pt_x, bc_pt_y = self.get_anchor_pt()
-
-            self.font_size -= 2
-            self.label.config(font=("Arial", self.font_size))
-            self.overlay_wnd.update_idletasks()
-
-            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
+            self.overlay.destroy()
+            self.overlay = None
 
 
 if __name__ == "__main__":

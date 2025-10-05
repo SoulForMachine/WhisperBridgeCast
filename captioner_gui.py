@@ -300,9 +300,11 @@ class CaptionerUI:
         tk.Label(root, text="Whisper model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.model_var = tk.StringVar(value="base.en")
         model_options = [
-            "tiny.en", "tiny", "base.en", "base", "small.en", "small",
-            "medium.en", "medium",
-            "large-v1", "large-v2", "large-v3", "large", "large-v3-turbo"
+            "tiny.en", "tiny",
+            "base.en", "base",
+            "small.en", "distil-small.en", "small",
+            "medium.en", "distil-medium.en", "medium",
+            "large-v1", "large-v2", "distil-large-v2", "large-v3", "distil-large-v3", "large", "large-v3-turbo", "turbo"
         ]
         self.model_combo = ttk.Combobox(root, textvariable=self.model_var, values=model_options, state="readonly")
         self.model_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -608,7 +610,7 @@ class CaptionerUI:
             dev_info_2 = self.get_selected_device_info(2)
             self.audio_temp_queue_2 = queue.Queue()
             self.audio_listener_2 = AudioListener(min_chunk_size, dev_info_2, self.audio_temp_queue_2)
-            self.audio_mixer = AudioMixer(self.audio_temp_queue_1, self.audio_temp_queue_2, self.audio_queue)
+            self.audio_mixer = AudioMixer(self.audio_temp_queue_1, self.audio_temp_queue_2, self.audio_queue, int(self.audio_listener_2.min_chunk_size * self.audio_listener_2.WHISPER_SAMPLERATE))
         else:
             # We use one device, puts the results directly to the audio_queue.
             self.audio_listener = AudioListener(min_chunk_size, dev_info_1, self.audio_queue)
@@ -751,64 +753,6 @@ class AudioListener:
 
 class AudioMixer:
     """
-    Mixes two audio sources (mic + VB-CABLE) from their queues into a single
-    16 kHz mono stream for Whisper.
-    """
-    def __init__(self, mic_queue: queue.Queue, cable_queue: queue.Queue, result_queue: queue.Queue):
-        self.mic_queue = mic_queue
-        self.cable_queue = cable_queue
-        self.result_queue = result_queue
-        self.stop_event = threading.Event()
-
-        self.mixing_thread = threading.Thread(target=self.run)
-        self.mixing_thread.start()
-
-        # Minimum chunk size in samples (same as your AudioListener min_chunk_size)
-        #self.min_chunk_size = 8000  # e.g., 0.5 s at 16 kHz
-
-    def stop(self):
-        self.stop_event.set()
-        self.mic_queue.put(None)
-        self.cable_queue.put(None)
-        self.mixing_thread.join()
-        self.mixing_thread = None
-
-    def receive_chunk_from_queue(self, q: queue.Queue):
-        """
-        Pull one chunk from a queue, or return None if empty.
-        """
-        try:
-            return q.get(timeout=0.1)
-        except queue.Empty:
-            return None
-
-    def run(self):
-        while not self.stop_event.is_set():
-            mic_chunk = self.receive_chunk_from_queue(self.mic_queue)
-            cable_chunk = self.receive_chunk_from_queue(self.cable_queue)
-
-            # Skip if both are empty
-            if mic_chunk is None and cable_chunk is None:
-                continue
-
-            # Replace None with zeros for mixing
-            if mic_chunk is None:
-                mic_chunk = np.zeros_like(cable_chunk)
-            if cable_chunk is None:
-                cable_chunk = np.zeros_like(mic_chunk)
-
-            # Align lengths
-            min_len = min(len(mic_chunk), len(cable_chunk))
-            mixed = mic_chunk[:min_len] + cable_chunk[:min_len]
-
-            # Optional: prevent clipping
-            mixed = np.clip(mixed, -1.0, 1.0)
-
-            self.result_queue.put(mixed)
-
-
-class AudioMixer2:
-    """
     Mixes two audio sources (mic + VB-CABLE) into a single
     16 kHz mono stream, outputting uniform chunks.
     """
@@ -824,8 +768,15 @@ class AudioMixer2:
         # Buffers to hold leftover samples until enough are collected
         self.buffer = np.zeros(0, dtype=np.float32)
 
+        self.mixing_thread = threading.Thread(target=self.run)
+        self.mixing_thread.start()
+
     def stop(self):
         self.stop_event.set()
+        self.mic_queue.put(None)
+        self.cable_queue.put(None)
+        self.mixing_thread.join()
+        self.mixing_thread = None
 
     def receive_chunk_from_queue(self, q: queue.Queue):
         """Pull one chunk from a queue, or return None if empty."""

@@ -89,7 +89,7 @@ class WhisperOnline:
     def clear(self):
         self.asr_proc.init()
 
-######### Mic processor
+######### ASR processor
 
 class ASRProcessor:
     def __init__(self, client_params: dict, audio_queue: mp.Queue, result_queue: mp.Queue):

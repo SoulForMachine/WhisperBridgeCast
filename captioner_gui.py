@@ -550,11 +550,11 @@ class CaptionerUI:
     def run_captioner(self):
         self.audio_queue = queue.Queue()
         self.results_queue = queue.Queue()
-        self.connect_to_server()
-        self.run_audio_listener()
 
-        if not self.zoom_url_var.get().strip():
-            self.run_captions_overlay()
+        if self.connect_to_server():
+            if not self.zoom_url_var.get().strip():
+                self.run_captions_overlay()
+            self.run_audio_listener()
 
     def connect_to_server(self):
         threshold, valid = str_to_float(self.threshold_var.get())
@@ -589,6 +589,7 @@ class CaptionerUI:
 
         self.whisper_client = WhisperClient(self.server_url_var.get().strip(), port, params, self.audio_queue, self.results_queue)
         self.whisper_client.start()
+        return self.whisper_client.wait_until_connected(2.0)
 
     def run_captions_overlay(self):
         self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
@@ -851,6 +852,8 @@ class WhisperClient:
             print(f"Could not connect to the whisper server: {e}")
             return
 
+        self.connected_event.set()
+
         # Step 1: send params JSON
         ccmn.send_json(sock, self.params)
 
@@ -890,6 +893,9 @@ class WhisperClient:
                 continue
 
             if msg["type"] == "status":
+                if msg["value"] == "ready":
+                    # Here we handle the notification that the server is ready to receive audio.
+                    pass
                 if msg["value"] == "shutdown":
                     break
             elif msg["type"] == "translation":
@@ -898,6 +904,9 @@ class WhisperClient:
                     self.results_queue.put((msg['text'], msg['complete']))
             else:
                 print("Unknown message: ", msg)
+
+    def wait_until_connected(self, timeout: float) -> bool:
+        return self.connected_event.wait(timeout=timeout)
 
 
 class CaptionsReceiver:

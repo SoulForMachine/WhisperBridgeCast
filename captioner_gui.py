@@ -146,7 +146,6 @@ class CaptionerUI:
         self.audio_queue = None
         self.results_queue = None
         self.whisper_client = None
-        self.whisper_client_thread = None
         self.captions_overlay = None
 
         self.gui_queue = queue.Queue()
@@ -589,8 +588,7 @@ class CaptionerUI:
         }
 
         self.whisper_client = WhisperClient(self.server_url_var.get().strip(), port, params, self.audio_queue, self.results_queue)
-        self.whisper_client_thread = threading.Thread(target=self.whisper_client.run)
-        self.whisper_client_thread.start()
+        self.whisper_client.start()
 
     def run_captions_overlay(self):
         self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
@@ -634,9 +632,7 @@ class CaptionerUI:
         if self.whisper_client:
             print("Stopping whisper client...", flush=True)
             self.whisper_client.stop()
-            self.whisper_client_thread.join()
             self.whisper_client = None
-            self.whisper_client_thread = None
 
         if self.captions_overlay:
             print("Stopping captions overlay...", flush=True)
@@ -831,6 +827,21 @@ class WhisperClient:
         self.results_queue = results_queue
         self.connected_event = threading.Event()
         self.results_thread = None
+        self.whisper_client_thread = None
+        self.is_running = False
+
+    def start(self):
+        if not self.is_running:
+            self.is_running = True
+            self.whisper_client_thread = threading.Thread(target=self.run)
+            self.whisper_client_thread.start()
+
+    def stop(self):
+        if self.is_running:
+            self.is_running = False
+            self.audio_queue.put(None)
+            self.whisper_client_thread.join()
+            self.whisper_client_thread = None
 
     def run(self):
         try:
@@ -887,9 +898,6 @@ class WhisperClient:
                     self.results_queue.put((msg['text'], msg['complete']))
             else:
                 print("Unknown message: ", msg)
-
-    def stop(self):
-        self.audio_queue.put(None)
 
 
 class CaptionsReceiver:

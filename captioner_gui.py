@@ -405,7 +405,7 @@ class CaptionerUI:
 
         self.connect_btn = ttk.Button(buttons_frame, text="Connect", command=self.toggle_connection)
         self.record_btn = ttk.Button(buttons_frame, text="Start recording", command=self.toggle_recording, state="disabled")
-        self.mute_btn = ttk.Button(buttons_frame, text="Mute", command=None, state="disabled")
+        self.mute_btn = ttk.Button(buttons_frame, text="🔊", command=self.toggle_mute, state="disabled")
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
         for i, btn in enumerate((self.connect_btn, self.record_btn, self.mute_btn, self.quit_btn)):
             btn.grid(row=0, column=i, sticky="e", padx=5, pady=5)
@@ -444,15 +444,14 @@ class CaptionerUI:
         if self.is_connected_to_server:
             if self.is_recording:
                 self.stop_captioner()
-                self.record_btn.config(text="Start recording")
                 self.is_recording = False
             self.connect_btn.config(state="disabled")
             self.disconnect_from_server()
-            self.connect_btn.config(state="normal")
-            self.connect_btn.config(text="Connect")
-            self.record_btn.config(state="disabled")
+            self.connect_btn.config(state="normal", text="Connect")
+            self.record_btn.config(state="disabled", text="Start recording")
         else:
             self.connect_btn.config(state="disabled")
+            self.connect_btn.update_idletasks()
             if self.connect_to_server():
                 self.connect_btn.config(text="Disconnect")
                 self.record_btn.config(state="normal")
@@ -462,6 +461,7 @@ class CaptionerUI:
         if self.is_recording:
             self.stop_captioner()
             self.record_btn.config(text="Start recording")
+            self.mute_btn.config(state="disabled", text="🔊")
             self.is_recording = False
             print("Recording stopped.")
         else:
@@ -488,7 +488,17 @@ class CaptionerUI:
             print("Running Captioner...")
             if self.run_captioner():
                 self.record_btn.config(text="Stop recording")
+                self.mute_btn.config(state="normal")
                 self.is_recording = True
+
+    def toggle_mute(self):
+        if self.audio_listener:
+            if self.audio_listener.is_paused():
+                self.audio_listener.resume_stream()
+                self.mute_btn.config(text="🔊")
+            else:
+                self.audio_listener.pause_stream()
+                self.mute_btn.config(text="🔇")
 
     def quit(self):
         if self.is_recording:
@@ -754,6 +764,7 @@ class AudioListener:
         self.device_channels = input_device_info.channels
         self.in_stream_block_dur = input_device_info.block_dur
         self.blocksize = int(self.device_rate * self.in_stream_block_dur)
+        self.stream = None
 
         self.audio_queue = queue.Queue()
         self.result_queue = result_queue
@@ -773,6 +784,19 @@ class AudioListener:
         except Exception as e:
             return False, str(e)
         return True, ""
+    
+    def pause_stream(self):
+        if self.stream and self.stream.active:
+            self.stream.stop()
+
+    def resume_stream(self):
+        if self.stream and not self.stream.active:
+            self.stream.start()
+
+    def is_paused(self):
+        if self.stream:
+            return not self.stream.active
+        return False
 
     def start(self):
         if not self.is_running:
@@ -780,6 +804,14 @@ class AudioListener:
             self.audio_thread = threading.Thread(target=self.run)
             self.audio_thread.start()
             self.is_running = True
+
+    def stop(self):
+        if self.is_running:
+            self.stop_event.set()
+            self.audio_thread.join()
+            self.audio_thread = None
+            self.is_running = False
+            self.stream = None
 
     def _audio_callback_old(self, indata, frames, time_info, status):
         if status:
@@ -847,20 +879,14 @@ class AudioListener:
             blocksize=self.blocksize,
             callback=self.audio_callback,
             device=self.input_device_info.index
-        ):
+        ) as stream:
+            self.stream = stream
             while not self.stop_event.is_set():
                 chunk = self.receive_audio_chunk()
                 if chunk is None or len(chunk) == 0:
                     continue
 
                 self.result_queue.put(chunk)
-
-    def stop(self):
-        if self.is_running:
-            self.stop_event.set()
-            self.audio_thread.join()
-            self.audio_thread = None
-            self.is_running = False
 
 
 class AudioMixer:

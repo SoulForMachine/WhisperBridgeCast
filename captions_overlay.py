@@ -31,6 +31,7 @@ class CaptionsOverlay:
         self.overlay_wnd.attributes("-topmost", True)
         self.overlay_wnd.attributes("-alpha", 0.8)
         self.overlay_wnd.overrideredirect(True)
+        self.overlay_wnd.protocol("WM_DELETE_WINDOW", lambda: None)  # Disable close button
 
         self.overlay_wnd.bind("<Button-1>", self.start_move)
         self.overlay_wnd.bind("<B1-Motion>", self.do_move)

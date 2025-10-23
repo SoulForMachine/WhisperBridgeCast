@@ -1,0 +1,37 @@
+# --- Python cache and build ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+build/
+dist/
+
+# --- Virtual environments ---
+.env/
+.venv/
+venv/
+
+# --- IDE and editor files ---
+.vs/
+.vscode/
+.idea/
+
+# --- OS-specific ---
+.DS_Store
+Thumbs.db
+
+# --- Project-specific ---
+data/
+scafolding/
+
+# --- Logs, temp, and misc ---
+*.log
+*.tmp
+*.bak
+*.swp
+todo.txt
+
+# --- Optional: local test files ---
+capt-overlay-test.py

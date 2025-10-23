@@ -169,7 +169,7 @@ class CaptionerUI:
         self.row_index_map = {}  # to keep track of grid row index - wnd/frame -> index
 
         row_idx = self.next_row()
-        url_frame = tk.Frame(root)
+        url_frame = ttk.Frame(root)
         url_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
 
         # make second column expand
@@ -177,7 +177,7 @@ class CaptionerUI:
 
         # --- Whisper Server URL ---
         row_idx = self.next_row(url_frame)
-        tk.Label(url_frame, text="Whisper Server URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(url_frame, text="Whisper Server URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.server_url_var = tk.StringVar(value="galloway")
         self.server_url_entry = ttk.Entry(url_frame, textvariable=self.server_url_var)
         self.server_url_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
@@ -187,7 +187,7 @@ class CaptionerUI:
 
         # --- Zoom URL ---
         row_idx = self.next_row(url_frame)
-        tk.Label(url_frame, text="Zoom URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(url_frame, text="Zoom URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.zoom_url_var = tk.StringVar(value="")
         self.zoom_url_entry = ttk.Entry(url_frame, textvariable=self.zoom_url_var)
         self.zoom_url_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
@@ -197,7 +197,7 @@ class CaptionerUI:
         # --- Settings ---
 
         row_idx = self.next_row()
-        settings_frame = tk.Frame(root)
+        settings_frame = ttk.Frame(root)
         settings_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
 
         settings_notebook = ttk.Notebook(settings_frame)
@@ -210,14 +210,14 @@ class CaptionerUI:
         
         # === Speech language ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.lang_var = tk.StringVar(value="English")
         self.lang_combo = ttk.Combobox(whisper_tab, textvariable=self.lang_var, values=["English", "Serbian"], state="readonly")
         self.lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper model ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.model_var = tk.StringVar(value="base.en")
         model_options = [
             "tiny.en", "tiny",
@@ -231,14 +231,14 @@ class CaptionerUI:
 
         # === Whisper device ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.whisper_device_var = tk.StringVar(value="cuda")
         self.whisper_device_combo = ttk.Combobox(whisper_tab, textvariable=self.whisper_device_var, values=["cuda", "cpu"], state="readonly")
         self.whisper_device_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper compute type ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.whisper_compute_type_var = tk.StringVar(value="float32")
         dtypes = ["int8", "int8_float16", "float16", "float32"]
         self.whisper_compute_type_combo = ttk.Combobox(whisper_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
@@ -246,14 +246,14 @@ class CaptionerUI:
 
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Non-speech probability\nthreshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Non-speech probability\nthreshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.threshold_var = tk.StringVar(value="0.95")
         self.threshold_entry = ttk.Entry(whisper_tab, textvariable=self.threshold_var)
         self.threshold_entry.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Minimum chunk size ===
         row_idx = self.next_row(whisper_tab)
-        tk.Label(whisper_tab, text="Minimum chunk size (sec)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Minimum chunk size (sec)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.min_chunk_size_var = tk.StringVar(value="0.6")
         self.min_chunk_size_entry = ttk.Entry(whisper_tab, textvariable=self.min_chunk_size_var)
         self.min_chunk_size_entry.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -279,7 +279,7 @@ class CaptionerUI:
         self.enable_translation_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
-        tk.Label(translation_tab, text="Target language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(translation_tab, text="Target language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.target_lang_var = tk.StringVar(value="Serbian")
         self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=["Serbian", "English"], state="readonly")
         self.target_lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -296,17 +296,17 @@ class CaptionerUI:
         dev_name, api_name = default_input_device(self.device_map)
 
         row_idx = self.next_row(audio_tab)
-        tk.Label(audio_tab, text="Audio device 1").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(audio_tab, text="Audio device 1").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_combo_1 = ttk.Combobox(audio_tab, values=device_list, width=dev_combo_width, state="readonly")
         self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(audio_tab)
-        tk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        ttk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.audio_device_host_api_combo_1 = ttk.Combobox(audio_tab, values=[], state="readonly")
         self.audio_device_host_api_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_1_selection_change)
 
-        ch_resample_frame = tk.Frame(audio_tab)
+        ch_resample_frame = ttk.Frame(audio_tab)
         ch_resample_frame.grid(row=row_idx, column=3)
 
         self.audio_device_channels_var_1 = tk.StringVar(value="default ch")
@@ -323,7 +323,7 @@ class CaptionerUI:
         self.input_dev_info_label_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         # For block duration / size
-        block_frame = tk.Frame(audio_tab)
+        block_frame = ttk.Frame(audio_tab)
         block_frame.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
         block_frame.columnconfigure(0, weight=1)
         block_frame.rowconfigure(0, weight=1)
@@ -346,7 +346,7 @@ class CaptionerUI:
         # === Audio device 2 ===
 
         row_idx = self.next_row(audio_tab)
-        tk.Label(audio_tab, text="Audio device 2").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(audio_tab, text="Audio device 2").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_combo_2 = ttk.Combobox(audio_tab, values=device_list, width=dev_combo_width, state="disabled")
         self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
@@ -356,12 +356,12 @@ class CaptionerUI:
         self.use_second_audio_dev_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(audio_tab)
-        tk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        ttk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.audio_device_host_api_combo_2 = ttk.Combobox(audio_tab, values=[], state="disabled")
         self.audio_device_host_api_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_2_selection_change)
 
-        ch_resample_frame_2 = tk.Frame(audio_tab)
+        ch_resample_frame_2 = ttk.Frame(audio_tab)
         ch_resample_frame_2.grid(row=row_idx, column=3)
 
         self.audio_device_channels_var_2 = tk.StringVar(value="default ch")
@@ -378,7 +378,7 @@ class CaptionerUI:
         self.input_dev_info_label_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         # For block duration / size
-        block_frame_2 = tk.Frame(audio_tab)
+        block_frame_2 = ttk.Frame(audio_tab)
         block_frame_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
         block_frame_2.columnconfigure(0, weight=1)
         block_frame_2.rowconfigure(0, weight=1)
@@ -425,11 +425,11 @@ class CaptionerUI:
         win.resizable(False, False)  # Disable resizing
 
         # Message text
-        label = tk.Label(win, text=message, padx=20, pady=20)
+        label = ttk.Label(win, text=message, padx=20, pady=20)
         label.pack()
 
         # OK button
-        btn = tk.Button(win, text="OK", command=win.destroy, width=10)
+        btn = ttk.Button(win, text="OK", command=win.destroy, width=10)
         btn.pack(pady=10)
 
         # Center relative to parent

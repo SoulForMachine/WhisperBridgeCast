@@ -23,7 +23,6 @@ venv/
 Thumbs.db
 
 # --- Project-specific ---
-data/
 scafolding/
 
 # --- Logs, temp, and misc ---
@@ -32,6 +31,3 @@ scafolding/
 *.bak
 *.swp
 todo.txt
-
-# --- Optional: local test files ---
-capt-overlay-test.py

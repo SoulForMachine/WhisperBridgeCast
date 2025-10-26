@@ -22,7 +22,7 @@ class InputDeviceCaps:
         self.index = index
 
     def __repr__(self):
-        return f"InputDeviceCaps(channels={self.channels}, samplerate={self.samplerate}, index={self.index})"
+        return f"InputDeviceCaps(channels={self.channels}, samplerate={self.samplerate}, min_latency={self.min_latency}, max_latency={self.max_latency}, index={self.index})"
 
 class InputDeviceInfo:
     def __init__(self, name: str, api: str, block_dur: float, caps: InputDeviceCaps):
@@ -693,22 +693,11 @@ class CaptionerUI:
         if use_second_dev:
             self.audio_temp_queue_1 = queue.Queue()
             self.audio_listener = AudioListener(min_chunk_size, dev_info_1, self.audio_temp_queue_1)
-            set_ok, err_msg = self.audio_listener.check_input_settings()
-            if not set_ok:
-                print(f"Error: Audio device 1 settings are not valid: {err_msg}")
-                self.audio_listener = None
-                return False
             self.audio_listener.start()
 
             dev_info_2 = self.get_selected_device_info(2)
             self.audio_temp_queue_2 = queue.Queue()
             self.audio_listener_2 = AudioListener(min_chunk_size, dev_info_2, self.audio_temp_queue_2)
-            set_ok, err_msg = self.audio_listener_2.check_input_settings()
-            if not set_ok:
-                print(f"Error: Audio device 2 settings are not valid: {err_msg}")
-                self.audio_listener = None
-                self.audio_listener_2 = None
-                return False
             self.audio_listener_2.start()
             
             self.audio_mixer = AudioMixer(self.audio_temp_queue_1, self.audio_temp_queue_2, self.audio_queue, int(self.audio_listener_2.min_chunk_size * self.audio_listener_2.WHISPER_SAMPLERATE))
@@ -716,11 +705,6 @@ class CaptionerUI:
         else:
             # We use one device, puts the results directly to the audio_queue.
             self.audio_listener = AudioListener(min_chunk_size, dev_info_1, self.audio_queue)
-            set_ok, err_msg = self.audio_listener.check_input_settings()
-            if not set_ok:
-                print(f"Error: Audio device 1 settings are not valid: {err_msg}")
-                self.audio_listener = None
-                return False
             self.audio_listener.start()
             
         return True
@@ -760,8 +744,18 @@ class AudioListener:
 
         self.WHISPER_SAMPLERATE = 16000
 
-        self.device_rate = int(input_device_info.samplerate)
         self.device_channels = input_device_info.channels
+        self.device_rate = int(input_device_info.samplerate)
+
+        self.resample_stream = None
+        self.downmix, self.resample = self.check_needed_processing()
+
+        if not self.downmix:
+            self.device_channels = 1
+
+        if not self.resample:
+            self.device_rate = self.WHISPER_SAMPLERATE
+
         self.in_stream_block_dur = input_device_info.block_dur
         self.blocksize = int(self.device_rate * self.in_stream_block_dur)
         self.stream = None
@@ -773,17 +767,33 @@ class AudioListener:
         self.audio_thread = None
         self.is_running = False
 
-    def check_input_settings(self):
+    def check_input_settings(self, device, channels, samplerate):
         try:
             sd.check_input_settings(
-                device=self.input_device_info.index,
-                channels=self.device_channels,
-                samplerate=self.device_rate,
+                device=device,
+                channels=channels,
+                samplerate=samplerate,
                 dtype="float32"
             )
-        except Exception as e:
-            return False, str(e)
-        return True, ""
+        except Exception:
+            return False
+        return True
+
+    def check_needed_processing(self):
+        # No processing needed if these settings are accepted
+        if self.check_input_settings(self.input_device_info.index, 1, self.WHISPER_SAMPLERATE):
+            return False, False
+
+        # Only downmix needed if 16kHz samplerate is accepted
+        if self.check_input_settings(self.input_device_info.index, self.device_channels, self.WHISPER_SAMPLERATE):
+            return True, False
+
+        # Only resample needed if mono is accepted
+        if self.check_input_settings(self.input_device_info.index, 1, self.device_rate):
+            return False, True
+
+        # Both downmix and resample needed
+        return True, True
     
     def pause_stream(self):
         if self.stream and self.stream.active:
@@ -808,59 +818,46 @@ class AudioListener:
     def stop(self):
         if self.is_running:
             self.stop_event.set()
+            self.audio_queue.put(None)  # Sentinel to unblock receive_audio_chunk()
             self.audio_thread.join()
             self.audio_thread = None
             self.is_running = False
             self.stream = None
 
-    def _audio_callback_old(self, indata, frames, time_info, status):
-        if status:
-            logger.warning(f"Audio callback status: {status}")
-        pcm16 = (indata * 32767).astype(np.int16)
-        audio_float = pcm16.astype(np.float32) / 32767.0
-        self.audio_queue.put(audio_float.copy())
-
     def downmix_mono(self, data: np.ndarray) -> np.ndarray:
         # Convert multi-channel audio to mono by averaging channels
-        if data.shape[1] > 1:
-            return data.mean(axis=1)
-        return data[:, 0]
+        return data.mean(axis=1)
 
     def resample_to_whisper(self, data: np.ndarray) -> np.ndarray:
-        # Resample audio to 16kHz if necessary
-        if self.device_rate == self.WHISPER_SAMPLERATE:
-            return data
-        from scipy.signal import resample_poly
-        return resample_poly(data, self.WHISPER_SAMPLERATE, self.device_rate)
+        return self.resample_stream.resample_chunk(data)
 
     def audio_callback(self, indata, frames, time_info, status):
         if status and not self.is_first:
             logger.warning(f"Audio callback status: {status}")
 
-        mono = self.downmix_mono(indata)
-        mono16k = self.resample_to_whisper(mono)
-        if mono16k.dtype != np.float32:
-            mono16k = mono16k.astype(np.float32)
-        self.audio_queue.put(mono16k)
+        self.audio_queue.put(indata.copy())
 
     def receive_audio_chunk(self):
         out = []
-        minlimit = int(self.min_chunk_size * self.WHISPER_SAMPLERATE)
+        minlimit = int(self.min_chunk_size * self.device_rate)
         while sum(len(x) for x in out) < minlimit:
-            try:
-                # Get a chunk from audio queue. Timeout is slightly longer than minimum chunk duration.
-                chunk = self.audio_queue.get(timeout=self.min_chunk_size * 1.1)
-            except queue.Empty:
-                break
+            chunk = self.audio_queue.get()
+
+            # Sentinel placed into the queue when stopping
+            if chunk is None:
+                return None
+
             out.append(chunk)
 
-        if not out:
-            return None
         conc = np.concatenate(out)
         if self.is_first and len(conc) < minlimit:
             return None
         self.is_first = False
-        return conc
+
+        mono = self.downmix_mono(conc) if self.downmix else conc
+        mono16k = self.resample_to_whisper(mono) if self.resample else mono
+
+        return mono16k
 
     def run(self):
         print_info = (
@@ -872,21 +869,34 @@ class AudioListener:
         )
         print(print_info, flush=True)
 
-        with sd.InputStream(
-            samplerate=self.device_rate,
-            channels=self.device_channels,
-            dtype="float32",
-            blocksize=self.blocksize,
-            callback=self.audio_callback,
-            device=self.input_device_info.index
-        ) as stream:
-            self.stream = stream
-            while not self.stop_event.is_set():
-                chunk = self.receive_audio_chunk()
-                if chunk is None or len(chunk) == 0:
-                    continue
+        try:
+            with sd.InputStream(
+                samplerate=self.device_rate,
+                channels=self.device_channels,
+                dtype="float32",
+                blocksize=self.blocksize,
+                callback=self.audio_callback,
+                device=self.input_device_info.index
+            ) as stream:
+                self.stream = stream
 
-                self.result_queue.put(chunk)
+                if self.resample:
+                    import soxr
+                    self.resample_stream = soxr.ResampleStream(self.device_rate, self.WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
+
+                while not self.stop_event.is_set():
+                    chunk = self.receive_audio_chunk()
+                    if chunk is None or len(chunk) == 0:
+                        continue
+
+                    self.result_queue.put(chunk)
+
+                if self.resample:
+                    tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
+                    self.result_queue.put(tail)
+                    self.resample_stream = None
+        except Exception as e:
+            logger.error(f"Audio stream error: {e}")
 
 
 class AudioMixer:

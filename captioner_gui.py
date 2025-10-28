@@ -218,7 +218,7 @@ class CaptionerUI:
         # === Whisper model ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.model_var = tk.StringVar(value="base.en")
+        self.model_var = tk.StringVar(value="distil-large-v3")
         model_options = [
             "tiny.en", "tiny",
             "base.en", "base",
@@ -239,7 +239,7 @@ class CaptionerUI:
         # === Whisper compute type ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.whisper_compute_type_var = tk.StringVar(value="float32")
+        self.whisper_compute_type_var = tk.StringVar(value="int8")
         dtypes = ["int8", "int8_float16", "float16", "float32"]
         self.whisper_compute_type_combo = ttk.Combobox(whisper_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
         self.whisper_compute_type_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -740,7 +740,6 @@ class AudioListener:
     def __init__(self, min_chunk_size: float, input_device_info: InputDeviceInfo, result_queue: queue.Queue):
         self.min_chunk_size = min_chunk_size
         self.input_device_info = input_device_info
-        self.is_first = True
 
         self.WHISPER_SAMPLERATE = 16000
 
@@ -832,7 +831,7 @@ class AudioListener:
         return self.resample_stream.resample_chunk(data)
 
     def audio_callback(self, indata, frames, time_info, status):
-        if status and not self.is_first:
+        if status:
             logger.warning(f"Audio callback status: {status}")
 
         self.audio_queue.put(indata.copy())
@@ -840,7 +839,8 @@ class AudioListener:
     def receive_audio_chunk(self):
         out = []
         minlimit = int(self.min_chunk_size * self.device_rate)
-        while sum(len(x) for x in out) < minlimit:
+        cur_size = 0
+        while cur_size < minlimit:
             chunk = self.audio_queue.get()
 
             # Sentinel placed into the queue when stopping
@@ -848,11 +848,9 @@ class AudioListener:
                 return None
 
             out.append(chunk)
+            cur_size += len(chunk)
 
         conc = np.concatenate(out)
-        if self.is_first and len(conc) < minlimit:
-            return None
-        self.is_first = False
 
         mono = self.downmix_mono(conc) if self.downmix else conc
         mono16k = self.resample_to_whisper(mono) if self.resample else mono

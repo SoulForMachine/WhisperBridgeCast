@@ -5,7 +5,7 @@ import threading
 import numpy as np
 import sounddevice as sd
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, font
 import logging
 import captioner_common as ccmn
 from collections import defaultdict
@@ -136,7 +136,6 @@ def str_to_int(s):
 
 class CaptionerUI:
     def __init__(self):
-        self.setup_ui()
         self.is_recording = False
         self.is_connected_to_server = False
         self.audio_listener = None
@@ -148,6 +147,7 @@ class CaptionerUI:
         self.results_queue = None
         self.whisper_client = None
         self.captions_overlay = None
+        self.setup_ui()
 
         self.gui_queue = queue.Queue()
         threading.Thread(target=self.update_gui, daemon=True).start()
@@ -184,15 +184,34 @@ class CaptionerUI:
         self.server_port_var = tk.StringVar(value="5000")
         self.server_port_entry = ttk.Entry(url_frame, textvariable=self.server_port_var, width=6)
         self.server_port_entry.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
+        self.connect_btn = ttk.Button(url_frame, text="Connect", command=self.toggle_connection)
+        self.connect_btn.grid(row=row_idx, column=4, sticky="e", padx=5, pady=5)
 
         # --- Zoom URL ---
         row_idx = self.next_row(url_frame)
         ttk.Label(url_frame, text="Zoom URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.zoom_url_var = tk.StringVar(value="")
         self.zoom_url_entry = ttk.Entry(url_frame, textvariable=self.zoom_url_var)
-        self.zoom_url_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.zoom_url_entry.grid(row=row_idx, column=1, columnspan=3, sticky="ew", padx=5, pady=5)
         self.clear_btn = ttk.Button(url_frame, text="Clear", command=lambda: self.zoom_url_var.set(""))
-        self.clear_btn.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
+        self.clear_btn.grid(row=row_idx, column=4, sticky="e", padx=5, pady=5)
+
+        # --- Recording ---
+        row_idx = self.next_row(url_frame)
+        ttk.Label(url_frame, text="Audio sources").grid(row=row_idx, column=0, sticky="nw", padx=5, pady=5)
+        self.dev_label = ttk.Label(url_frame, text="Dev1: \n Dev2: ", relief="solid", justify="left", anchor="nw", padding=(4, 4))
+        self.dev_label.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
+        mute_frame = ttk.Frame(url_frame)
+        mute_frame.grid(row=row_idx, column=3, sticky="ew")
+        bigfont = font.Font(size=12)
+        style = ttk.Style()
+        style.configure("Icon.TButton", font=bigfont)
+        self.mute_btn = ttk.Button(mute_frame, text="🔊", width=2, style="Icon.TButton", command=self.toggle_mute, state="disabled")
+        self.mute_btn.pack(side="top", padx=0, pady=0)
+        self.mute_btn_2 = ttk.Button(mute_frame, text="🔊", width=2, style="Icon.TButton", command=self.toggle_mute_2, state="disabled")
+        self.mute_btn_2.pack(side="top", padx=0, pady=0)
+        self.record_btn = ttk.Button(url_frame, text="Record", command=self.toggle_recording, state="disabled")
+        self.record_btn.grid(row=row_idx, column=4, sticky="ne", padx=5, pady=5)
 
         # --- Settings ---
 
@@ -207,7 +226,6 @@ class CaptionerUI:
         whisper_tab = ttk.Frame(settings_notebook, padding=10)
         settings_notebook.add(whisper_tab, text="Whisper")
 
-        
         # === Speech language ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
@@ -288,129 +306,99 @@ class CaptionerUI:
         audio_tab = ttk.Frame(settings_notebook, padding=10)
         settings_notebook.add(audio_tab, text="Audio")
 
-        # === Audio device 1 ===
+        devices_notebook = ttk.Notebook(audio_tab)
+        devices_notebook.pack(fill="both", expand=True)
 
         self.device_map = list_unique_input_devices()
         device_list = list(self.device_map.keys())
         dev_combo_width = max(len(v) for v in device_list)
         dev_name, api_name = default_input_device(self.device_map)
 
-        row_idx = self.next_row(audio_tab)
-        ttk.Label(audio_tab, text="Audio device 1").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_combo_1 = ttk.Combobox(audio_tab, values=device_list, width=dev_combo_width, state="readonly")
-        self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        # === Audio device 1 ===
+        dev1_tab = ttk.Frame(devices_notebook, padding=10)
+        devices_notebook.add(dev1_tab, text="Device 1")
 
-        row_idx = self.next_row(audio_tab)
-        ttk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.audio_device_host_api_combo_1 = ttk.Combobox(audio_tab, values=[], state="readonly")
+        row_idx = self.next_row(dev1_tab)
+        ttk.Label(dev1_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.audio_device_combo_1 = ttk.Combobox(dev1_tab, values=device_list, width=dev_combo_width, state="readonly")
+        self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.audio_device_combo_1.set(dev_name)
+
+        # Use a Label widget for multiline read-only display
+        self.input_dev_info_label_1 = ttk.Label(dev1_tab, text="", relief="solid", padding=(4, 0))
+        self.input_dev_info_label_1.grid(row=row_idx, rowspan=3, column=3, sticky="new", padx=5, pady=5)
+
+        row_idx = self.next_row(dev1_tab)
+        ttk.Label(dev1_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.audio_device_host_api_combo_1 = ttk.Combobox(dev1_tab, values=[], state="readonly")
         self.audio_device_host_api_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_1_selection_change)
 
-        ch_resample_frame = ttk.Frame(audio_tab)
-        ch_resample_frame.grid(row=row_idx, column=3)
-
-        self.audio_device_channels_var_1 = tk.StringVar(value="default ch")
-        self.audio_device_channels_combo_1 = ttk.Combobox(ch_resample_frame, values=["default ch", "2ch"], state="readonly", textvariable=self.audio_device_channels_var_1, width=10)
-        self.audio_device_channels_combo_1.pack(side="left", padx=(5, 5))
-
-        self.audio_device_resample_var_1 = tk.BooleanVar(value=True)
-        self.audio_device_resample_check_1 = ttk.Checkbutton(ch_resample_frame, text="Resample", variable=self.audio_device_resample_var_1)
-        self.audio_device_resample_check_1.pack(side="left", padx=(5, 5))
-
-        # Use a Label widget for multiline read-only display
-        row_idx = self.next_row(audio_tab)
-        self.input_dev_info_label_1 = ttk.Label(audio_tab, text="", relief="solid", justify="left", anchor="nw")
-        self.input_dev_info_label_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-
-        # For block duration / size
-        block_frame = ttk.Frame(audio_tab)
-        block_frame.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
-        block_frame.columnconfigure(0, weight=1)
-        block_frame.rowconfigure(0, weight=1)
-        block_frame.rowconfigure(1, weight=1)
-
-        # Label
-        self.audio_device_block_dur_label_1 = ttk.Label(block_frame, text="Block duration: \nBlock size: ", relief="solid", justify="left", anchor="w")
-        self.audio_device_block_dur_label_1.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        # Block duration / size
+        row_idx = self.next_row(dev1_tab)
+        ttk.Label(dev1_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         # Slider
         self.audio_device_block_dur_slider_var_1 = tk.DoubleVar(value=0.5)
-        self.audio_device_block_dur_slider_1 = tk.Scale(block_frame, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_block_dur_slider_var_1, command=self.on_audio_device_1_block_dur_change)
-        self.audio_device_block_dur_slider_1.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.audio_device_block_dur_slider_var_1, command=self.on_audio_device_1_block_dur_change)
+        self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
 
-        # Now set the combo selection changed callback and select the default audio device.
-        self.audio_device_combo_1.set(dev_name)
-        self.audio_device_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_1_selection_change)
-        self.audio_device_combo_1.event_generate("<<ComboboxSelected>>")
+        # Block size and duration label
+        self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0))
+        self.audio_device_block_dur_label_1.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
 
         # === Audio device 2 ===
-
-        row_idx = self.next_row(audio_tab)
-        ttk.Label(audio_tab, text="Audio device 2").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_combo_2 = ttk.Combobox(audio_tab, values=device_list, width=dev_combo_width, state="disabled")
-        self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        dev2_tab = ttk.Frame(devices_notebook, padding=10)
+        devices_notebook.add(dev2_tab, text="Device 2")
 
         # Checkbox for enabling the second device
+        row_idx = self.next_row(dev2_tab)
         self.use_second_audio_dev_var = tk.BooleanVar(value=False)
-        self.use_second_audio_dev_check = ttk.Checkbutton(audio_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
-        self.use_second_audio_dev_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
+        self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
+        self.use_second_audio_dev_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(audio_tab)
-        ttk.Label(audio_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.audio_device_host_api_combo_2 = ttk.Combobox(audio_tab, values=[], state="disabled")
+        row_idx = self.next_row(dev2_tab)
+        ttk.Label(dev2_tab, text="Name").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.audio_device_combo_2 = ttk.Combobox(dev2_tab, values=device_list, width=dev_combo_width, state="disabled")
+        self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.audio_device_combo_2.set(dev_name)
+
+        # Use a Label widget for multiline read-only display
+        self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", state="disabled")
+        self.input_dev_info_label_2.grid(row=row_idx, rowspan=3, column=3, sticky="new", padx=5, pady=5)
+
+        row_idx = self.next_row(dev2_tab)
+        ttk.Label(dev2_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.audio_device_host_api_combo_2 = ttk.Combobox(dev2_tab, values=[], state="disabled")
         self.audio_device_host_api_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_2_selection_change)
 
-        ch_resample_frame_2 = ttk.Frame(audio_tab)
-        ch_resample_frame_2.grid(row=row_idx, column=3)
-
-        self.audio_device_channels_var_2 = tk.StringVar(value="default ch")
-        self.audio_device_channels_combo_2 = ttk.Combobox(ch_resample_frame_2, values=["default ch", "2ch"], state="disabled", textvariable=self.audio_device_channels_var_2, width=10)
-        self.audio_device_channels_combo_2.pack(side="left", padx=(5, 5))
-
-        self.audio_device_resample_var_2 = tk.BooleanVar(value=True)
-        self.audio_device_resample_check_2 = ttk.Checkbutton(ch_resample_frame_2, text="Resample", variable=self.audio_device_resample_var_2, state="disabled")
-        self.audio_device_resample_check_2.pack(side="left", padx=(5, 5))
-
-        # Use a Label widget for multiline read-only display
-        row_idx = self.next_row(audio_tab)
-        self.input_dev_info_label_2 = ttk.Label(audio_tab, text="", relief="solid", justify="left", anchor="nw", state="disabled")
-        self.input_dev_info_label_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-
-        # For block duration / size
-        block_frame_2 = ttk.Frame(audio_tab)
-        block_frame_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
-        block_frame_2.columnconfigure(0, weight=1)
-        block_frame_2.rowconfigure(0, weight=1)
-        block_frame_2.rowconfigure(1, weight=1)
-
-        # Label
-        self.audio_device_block_dur_label_2 = ttk.Label(block_frame_2, text="Block duration: \nBlock size: ", relief="solid", justify="left", anchor="w", state="disabled")
-        self.audio_device_block_dur_label_2.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        # Block duration / size
+        row_idx = self.next_row(dev2_tab)
+        ttk.Label(dev2_tab, text="Block").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
 
         # Slider
         self.audio_device_block_dur_slider_var_2 = tk.DoubleVar(value=0.5)
-        self.audio_device_block_dur_slider_2 = tk.Scale(block_frame_2, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, variable=self.audio_device_block_dur_slider_var_2, command=self.on_audio_device_2_block_dur_change, state="disabled")
-        self.audio_device_block_dur_slider_2.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.audio_device_block_dur_slider_var_2, command=self.on_audio_device_2_block_dur_change, state="disabled")
+        self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
 
-        # Now set the combo selection changed callback and select the default audio device.
-        self.audio_device_combo_2.set(dev_name)
-        self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
-        self.audio_device_combo_2.event_generate("<<ComboboxSelected>>")
+        # Block size and duration label
+        self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0), state="disabled")
+        self.audio_device_block_dur_label_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
 
         # --- Buttons ---
         row_idx = self.next_row()
         buttons_frame = ttk.Frame(root)
         buttons_frame.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
 
-        self.connect_btn = ttk.Button(buttons_frame, text="Connect", command=self.toggle_connection)
-        self.record_btn = ttk.Button(buttons_frame, text="Start recording", command=self.toggle_recording, state="disabled")
-        self.mute_btn = ttk.Button(buttons_frame, text="🔊", command=self.toggle_mute, state="disabled")
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
-        for i, btn in enumerate((self.connect_btn, self.record_btn, self.mute_btn, self.quit_btn)):
-            btn.grid(row=0, column=i, sticky="e", padx=5, pady=5)
+        self.quit_btn.grid(row=0, column=3, sticky="e", padx=5, pady=5)
 
         # Update block duration / size labels
+        self.audio_device_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_1_selection_change)
+        self.audio_device_combo_1.event_generate("<<ComboboxSelected>>")
+        self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
+        self.audio_device_combo_2.event_generate("<<ComboboxSelected>>")
         self.on_audio_device_1_block_dur_change(None)
         self.on_audio_device_2_block_dur_change(None)
 
@@ -425,12 +413,13 @@ class CaptionerUI:
         win.resizable(False, False)  # Disable resizing
 
         # Message text
-        label = ttk.Label(win, text=message, padx=20, pady=20)
+        label = ttk.Label(win, text=message, padding=(20, 20))
         label.pack()
 
         # OK button
         btn = ttk.Button(win, text="OK", command=win.destroy, width=10)
         btn.pack(pady=10)
+        btn.focus_set()
 
         # Center relative to parent
         win.update_idletasks()
@@ -448,7 +437,7 @@ class CaptionerUI:
             self.connect_btn.config(state="disabled")
             self.disconnect_from_server()
             self.connect_btn.config(state="normal", text="Connect")
-            self.record_btn.config(state="disabled", text="Start recording")
+            self.record_btn.config(state="disabled", text="Record")
         else:
             self.connect_btn.config(state="disabled")
             self.connect_btn.update_idletasks()
@@ -460,13 +449,15 @@ class CaptionerUI:
     def toggle_recording(self):
         if self.is_recording:
             self.stop_captioner()
-            self.record_btn.config(text="Start recording")
+            self.record_btn.config(text="Record")
             self.mute_btn.config(state="disabled", text="🔊")
+            self.mute_btn_2.config(state="disabled", text="🔊")
             self.is_recording = False
+            self.update_selected_devices_label()
             print("Recording stopped.")
         else:
             if self.use_second_audio_dev_var.get() and (self.audio_device_combo_1.get() == self.audio_device_combo_2.get()):
-                self.show_modal_message("Error", "Please select two different audio devices.", self.root_wnd)
+                self.show_modal_message("Error", "When the second audio device is enabled, different audio devices must be selected.", self.root_wnd)
                 return
 
             # Collect all values for debugging/demo purposes
@@ -487,8 +478,10 @@ class CaptionerUI:
 
             print("Running Captioner...")
             if self.run_captioner():
-                self.record_btn.config(text="Stop recording")
+                self.record_btn.config(text="Stop")
                 self.mute_btn.config(state="normal")
+                if self.use_second_audio_dev_var.get():
+                    self.mute_btn_2.config(state="normal")
                 self.is_recording = True
 
     def toggle_mute(self):
@@ -499,6 +492,15 @@ class CaptionerUI:
             else:
                 self.audio_listener.pause_stream()
                 self.mute_btn.config(text="🔇")
+
+    def toggle_mute_2(self):
+        if self.audio_listener_2:
+            if self.audio_listener_2.is_paused():
+                self.audio_listener_2.resume_stream()
+                self.mute_btn_2.config(text="🔊")
+            else:
+                self.audio_listener_2.pause_stream()
+                self.mute_btn_2.config(text="🔇")
 
     def quit(self):
         if self.is_recording:
@@ -519,18 +521,15 @@ class CaptionerUI:
             self.audio_device_combo_2.config(state="readonly")
             self.input_dev_info_label_2.config(state="normal")
             self.audio_device_host_api_combo_2.config(state="readonly")
-            self.audio_device_channels_combo_2.config(state="readonly")
-            self.audio_device_resample_check_2.config(state="normal")
             self.audio_device_block_dur_label_2.config(state="readonly")
             self.audio_device_block_dur_slider_2.config(state="normal")
         else:
             self.audio_device_combo_2.config(state="disabled")
             self.input_dev_info_label_2.config(state="disabled")
             self.audio_device_host_api_combo_2.config(state="disabled")
-            self.audio_device_channels_combo_2.config(state="disabled")
-            self.audio_device_resample_check_2.config(state="disabled")
             self.audio_device_block_dur_label_2.config(state="disabled")
             self.audio_device_block_dur_slider_2.config(state="disabled")
+        self.update_selected_devices_label()
 
     def on_audio_device_1_selection_change(self, event):
         dev_name = self.audio_device_combo_1.get()
@@ -538,6 +537,7 @@ class CaptionerUI:
         self.audio_device_host_api_combo_1['values'] = sort_api_by_preference(api_map.keys())
         self.audio_device_host_api_combo_1.current(0)
         self.audio_device_host_api_combo_1.event_generate("<<ComboboxSelected>>")
+        self.update_selected_devices_label()
 
     def on_audio_device_host_api_1_selection_change(self, event):
         dev_name = self.audio_device_combo_1.get()
@@ -547,7 +547,7 @@ class CaptionerUI:
             f"Index: {caps.index}\n"
             f"Channels: {caps.channels}\n"
             f"Samplerate: {int(caps.samplerate)}\n"
-            f"Latency range: {caps.min_latency} - {caps.max_latency}"
+            f"Latency range: {caps.min_latency:.3f} - {caps.max_latency:.3f}"
         )
         self.input_dev_info_label_1.config(text=info_text)
 
@@ -557,6 +557,7 @@ class CaptionerUI:
         self.audio_device_host_api_combo_2['values'] = sort_api_by_preference(api_map.keys())
         self.audio_device_host_api_combo_2.current(0)
         self.audio_device_host_api_combo_2.event_generate("<<ComboboxSelected>>")
+        self.update_selected_devices_label()
 
     def on_audio_device_host_api_2_selection_change(self, event):
         dev_name = self.audio_device_combo_2.get()
@@ -566,7 +567,7 @@ class CaptionerUI:
             f"Index: {caps.index}\n"
             f"Channels: {caps.channels}\n"
             f"Samplerate: {int(caps.samplerate)}\n"
-            f"Latency range: {caps.min_latency} - {caps.max_latency}"
+            f"Latency range: {caps.min_latency:.3f} - {caps.max_latency:.3f}"
         )
         self.input_dev_info_label_2.config(text=info_text)
 
@@ -574,8 +575,8 @@ class CaptionerUI:
         dev_info = self.get_selected_device_info(1)
         block_size = dev_info.samplerate * dev_info.block_dur
         info_text = (
-            f"Block duration: {dev_info.block_dur: .2f} s\n"
-            f"Block size: {int(block_size)} frames"
+            f"Duration: {dev_info.block_dur:.2f} s\n"
+            f"Size: {int(block_size)} frames"
         )
         self.audio_device_block_dur_label_1.config(text=info_text)
 
@@ -583,10 +584,21 @@ class CaptionerUI:
         dev_info = self.get_selected_device_info(2)
         block_size = dev_info.samplerate * dev_info.block_dur
         info_text = (
-            f"Block duration: {dev_info.block_dur: .2f} s\n"
-            f"Block size: {int(block_size)} frames"
+            f"Duration: {dev_info.block_dur:.2f} s\n"
+            f"Size: {int(block_size)} frames"
         )
         self.audio_device_block_dur_label_2.config(text=info_text)
+
+    def update_selected_devices_label(self):
+        if not self.is_recording:
+            dev1_name = self.audio_device_combo_1.get()
+            dev2_name = self.audio_device_combo_2.get() if self.use_second_audio_dev_var.get() else "<none>"
+
+            info_text = (
+                f"Dev1: {dev1_name}\n\n"
+                f"Dev2: {dev2_name}"
+            )
+            self.dev_label.config(text=info_text)
 
     # Helper to manage grid row indices
     def next_row(self, widget=None):
@@ -602,17 +614,9 @@ class CaptionerUI:
     def get_selected_device_info(self, dev_num: int) -> InputDeviceInfo:
         name = self.audio_device_combo_1.get() if dev_num == 1 else self.audio_device_combo_2.get()
         api = self.audio_device_host_api_combo_1.get() if dev_num == 1 else self.audio_device_host_api_combo_2.get()
-        ch = self.audio_device_channels_var_1.get() if dev_num == 1 else self.audio_device_channels_var_2.get()
-        resample = self.audio_device_resample_var_1.get() if dev_num == 1 else self.audio_device_resample_var_2.get()
         block_dur = self.audio_device_block_dur_slider_var_1.get() if dev_num == 1 else self.audio_device_block_dur_slider_var_2.get()
 
-        import copy
-        caps = copy.copy(self.device_map[name][api])
-        if ch == "2ch":
-            caps.channels = 2
-        if not resample:
-            caps.samplerate = 16000.0
-
+        caps = self.device_map[name][api]
         return InputDeviceInfo(name, api, block_dur, caps)
 
     def connect_to_server(self):

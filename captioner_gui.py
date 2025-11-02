@@ -10,6 +10,7 @@ import logging
 import captioner_common as ccmn
 from collections import defaultdict
 import captions_overlay
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,19 +26,99 @@ class InputDeviceCaps:
         return f"InputDeviceCaps(channels={self.channels}, samplerate={self.samplerate}, min_latency={self.min_latency}, max_latency={self.max_latency}, index={self.index})"
 
 class InputDeviceInfo:
-    def __init__(self, name: str, api: str, block_dur: float, caps: InputDeviceCaps):
+    def __init__(self, name: str, api: str, caps: InputDeviceCaps):
+        self.WHISPER_SAMPLERATE = 16000
+
         self.name = name
         self.api = api
         self.channels = caps.channels
         self.samplerate = caps.samplerate
         self.min_latency = caps.min_latency
         self.max_latency = caps.max_latency
-        self.block_dur = block_dur
         self.index = caps.index
+
+        self.downmix_needed, self.resample_needed = self.check_needed_processing()
+        self.target_channels = self.channels if self.downmix_needed else 1
+        self.target_samplerate = self.samplerate if self.resample_needed else self.WHISPER_SAMPLERATE
+
+        self.choose_safe_block_dur()
+
+    def check_input_settings(self, device, channels, samplerate):
+        try:
+            sd.check_input_settings(
+                device=device,
+                channels=channels,
+                samplerate=samplerate,
+                dtype="float32"
+            )
+        except Exception:
+            return False
+        return True
+
+    def check_needed_processing(self):
+        # No processing needed if these settings are accepted
+        if self.check_input_settings(self.index, 1, self.WHISPER_SAMPLERATE):
+            return False, False
+
+        # Only downmix needed if 16kHz samplerate is accepted
+        if self.check_input_settings(self.index, self.channels, self.WHISPER_SAMPLERATE):
+            return True, False
+
+        # Only resample needed if mono is accepted
+        if self.check_input_settings(self.index, 1, self.samplerate):
+            return False, True
+
+        # Both downmix and resample needed
+        return True, True
+
+    def choose_safe_block_dur(
+        self,
+        min_block_dur_floor: float = 0.005,   # absolute min 5 ms
+        preferred_upper_bound: float = 0.05  # don't pick > 50 ms for realtime
+    ) -> Tuple[float, int, Tuple[float, float]]:
+        """
+        Return (block_dur_seconds, blocksize_frames, (min_allowed, max_allowed)).
+
+        - Uses device low/high latencies as guidance.
+        - Enforces practical lower/upper limits for realtime streaming.
+        """
+        default_low_input_latency: float = self.min_latency
+        default_high_input_latency: float = self.max_latency
+        samplerate: int = int(self.target_samplerate)
+
+        low = float(default_low_input_latency or 0.0)
+        high = float(default_high_input_latency or 0.0)
+
+        # 1) Baseline allowed range
+        min_allowed = max(low, min_block_dur_floor)
+        # if high is zero or useless, provide a reasonable max_allowed
+        max_allowed = max(high, min_allowed * 4)
+
+        # 2) Preferred near-low but with breathing room and a sensible minimum
+        preferred = max(min_allowed * 1.5, 0.02)          # at least ~20ms preferred if possible
+        preferred = min(preferred, preferred_upper_bound) # don't exceed recommended realtime upper bound
+        preferred = clamp(preferred, min_allowed, max_allowed)
+
+        # 3) Ensure we have at least a few frames per block
+        blocksize = max(1, int(round(preferred * samplerate)))
+        # if blocksize is very small (<32 frames) bump it
+        if blocksize < 32:
+            blocksize = 32
+            preferred = blocksize / samplerate
+
+        self.block_dur = preferred
+        self.block_size = blocksize
+        self.min_block_dur_allowed = min_allowed
+        self.max_block_dur_allowed = max_allowed
+
+    def set_block_dur(self, block_dur: float):
+        self.block_dur = block_dur
+        self.block_size = int(round(self.block_dur * self.target_samplerate))
+
 
 def sort_api_by_preference(api_list):
     if sys.platform.startswith("win"):
-        preferred_apis = ["MME", "Windows DirectSound", "Windows WDM-KS", "Windows WASAPI"]
+        preferred_apis = ["Windows WDM-KS", "Windows WASAPI", "Windows DirectSound", "MME"]
     elif sys.platform == "darwin":
         preferred_apis = ["Core Audio"]
     else:  # Linux
@@ -134,10 +215,22 @@ def str_to_int(s):
     except ValueError:
         return None, False  # invalid int
 
+def clamp(x, lo, hi):
+    return max(lo, min(x, hi))
+
+def count_decimal_places(num: float) -> int:
+    from decimal import Decimal
+
+    d = Decimal(str(num))  # convert via string to preserve digits
+    decimals = max(0, -d.as_tuple().exponent)
+    return decimals
+
 class CaptionerUI:
     def __init__(self):
         self.is_recording = False
         self.is_connected_to_server = False
+        self.selected_device_1_info = None
+        self.selected_device_2_info = None
         self.audio_listener = None
         self.audio_listener_2 = None
         self.audio_mixer = None
@@ -265,7 +358,7 @@ class CaptionerUI:
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Non-speech probability\nthreshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.threshold_var = tk.StringVar(value="0.95")
+        self.threshold_var = tk.StringVar(value="0.8")
         self.threshold_entry = ttk.Entry(whisper_tab, textvariable=self.threshold_var)
         self.threshold_entry.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
@@ -399,8 +492,6 @@ class CaptionerUI:
         self.audio_device_combo_1.event_generate("<<ComboboxSelected>>")
         self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
         self.audio_device_combo_2.event_generate("<<ComboboxSelected>>")
-        self.on_audio_device_1_block_dur_change(None)
-        self.on_audio_device_2_block_dur_change(None)
 
         root.protocol("WM_DELETE_WINDOW", self.quit)
 
@@ -539,17 +630,34 @@ class CaptionerUI:
         self.audio_device_host_api_combo_1.event_generate("<<ComboboxSelected>>")
         self.update_selected_devices_label()
 
+    def format_device_info_text(self, dev_info: InputDeviceInfo):
+        info_text = (
+            f"Index: {dev_info.index}\n"
+            f"Channels: {dev_info.channels}" + (" (downmix to mono)" if dev_info.downmix_needed else "") + "\n"
+            f"Samplerate: {int(dev_info.samplerate)}" + (" (resample to 16kHz)" if dev_info.resample_needed else "") + "\n"
+            f"Latency range: {dev_info.min_latency:.3f} - {dev_info.max_latency:.3f}"
+        )
+        return info_text
+
     def on_audio_device_host_api_1_selection_change(self, event):
         dev_name = self.audio_device_combo_1.get()
         host_api = self.audio_device_host_api_combo_1.get()
         caps = self.device_map[dev_name][host_api]
-        info_text = (
-            f"Index: {caps.index}\n"
-            f"Channels: {caps.channels}\n"
-            f"Samplerate: {int(caps.samplerate)}\n"
-            f"Latency range: {caps.min_latency:.3f} - {caps.max_latency:.3f}"
+        dev_info = InputDeviceInfo(dev_name, host_api, caps)
+        self.selected_device_1_info = dev_info
+
+        self.input_dev_info_label_1.config(text=self.format_device_info_text(dev_info))
+
+        min_allowed = dev_info.min_block_dur_allowed
+        max_allowed = dev_info.max_block_dur_allowed
+        dec_places = min(4, max(count_decimal_places(min_allowed), count_decimal_places(max_allowed)))
+        resolution = 10 ** -dec_places
+        self.audio_device_block_dur_slider_1.config(
+            from_=min_allowed,
+            to=max_allowed,
+            resolution=resolution
         )
-        self.input_dev_info_label_1.config(text=info_text)
+        self.audio_device_block_dur_slider_var_1.set((min_allowed + max_allowed) / 2.0)
 
     def on_audio_device_2_selection_change(self, event):
         dev_name = self.audio_device_combo_2.get()
@@ -563,29 +671,37 @@ class CaptionerUI:
         dev_name = self.audio_device_combo_2.get()
         host_api = self.audio_device_host_api_combo_2.get()
         caps = self.device_map[dev_name][host_api]
-        info_text = (
-            f"Index: {caps.index}\n"
-            f"Channels: {caps.channels}\n"
-            f"Samplerate: {int(caps.samplerate)}\n"
-            f"Latency range: {caps.min_latency:.3f} - {caps.max_latency:.3f}"
+        dev_info = InputDeviceInfo(dev_name, host_api, caps)
+        self.selected_device_2_info = dev_info
+
+        self.input_dev_info_label_2.config(text=self.format_device_info_text(dev_info))
+
+        min_allowed = dev_info.min_block_dur_allowed
+        max_allowed = dev_info.max_block_dur_allowed
+        dec_places = min(4, max(count_decimal_places(min_allowed), count_decimal_places(max_allowed)))
+        resolution = 10 ** -dec_places
+        self.audio_device_block_dur_slider_2.config(
+            from_=min_allowed,
+            to=max_allowed,
+            resolution=resolution
         )
-        self.input_dev_info_label_2.config(text=info_text)
+        self.audio_device_block_dur_slider_var_2.set((min_allowed + max_allowed) / 2.0)
 
     def on_audio_device_1_block_dur_change(self, value):
-        dev_info = self.get_selected_device_info(1)
-        block_size = dev_info.samplerate * dev_info.block_dur
+        dev_info = self.selected_device_1_info
+        dev_info.set_block_dur(self.audio_device_block_dur_slider_var_1.get())
         info_text = (
-            f"Duration: {dev_info.block_dur:.2f} s\n"
-            f"Size: {int(block_size)} frames"
+            f"Duration: {dev_info.block_dur:.4f} s\n"
+            f"Size: {dev_info.block_size} frames"
         )
         self.audio_device_block_dur_label_1.config(text=info_text)
 
     def on_audio_device_2_block_dur_change(self, value):
-        dev_info = self.get_selected_device_info(2)
-        block_size = dev_info.samplerate * dev_info.block_dur
+        dev_info = self.selected_device_2_info
+        dev_info.set_block_dur(self.audio_device_block_dur_slider_var_2.get())
         info_text = (
-            f"Duration: {dev_info.block_dur:.2f} s\n"
-            f"Size: {int(block_size)} frames"
+            f"Duration: {dev_info.block_dur:.4f} s\n"
+            f"Size: {int(dev_info.block_size)} frames"
         )
         self.audio_device_block_dur_label_2.config(text=info_text)
 
@@ -610,14 +726,6 @@ class CaptionerUI:
         i = self.row_index_map[widget]
         self.row_index_map[widget] += 1
         return i
-
-    def get_selected_device_info(self, dev_num: int) -> InputDeviceInfo:
-        name = self.audio_device_combo_1.get() if dev_num == 1 else self.audio_device_combo_2.get()
-        api = self.audio_device_host_api_combo_1.get() if dev_num == 1 else self.audio_device_host_api_combo_2.get()
-        block_dur = self.audio_device_block_dur_slider_var_1.get() if dev_num == 1 else self.audio_device_block_dur_slider_var_2.get()
-
-        caps = self.device_map[name][api]
-        return InputDeviceInfo(name, api, block_dur, caps)
 
     def connect_to_server(self):
         if self.is_connected_to_server:
@@ -692,23 +800,21 @@ class CaptionerUI:
             print("Error: Invalid minimum chunk size. Setting to default: 0.6")
             min_chunk_size = 0.6
 
-        dev_info_1 = self.get_selected_device_info(1)
         use_second_dev = self.use_second_audio_dev_var.get()
         if use_second_dev:
             self.audio_temp_queue_1 = queue.Queue()
-            self.audio_listener = AudioListener(min_chunk_size, dev_info_1, self.audio_temp_queue_1)
+            self.audio_listener = AudioListener(min_chunk_size, self.selected_device_1_info, self.audio_temp_queue_1)
             self.audio_listener.start()
 
-            dev_info_2 = self.get_selected_device_info(2)
             self.audio_temp_queue_2 = queue.Queue()
-            self.audio_listener_2 = AudioListener(min_chunk_size, dev_info_2, self.audio_temp_queue_2)
+            self.audio_listener_2 = AudioListener(min_chunk_size, self.selected_device_2_info, self.audio_temp_queue_2)
             self.audio_listener_2.start()
-            
+
             self.audio_mixer = AudioMixer(self.audio_temp_queue_1, self.audio_temp_queue_2, self.audio_queue, int(self.audio_listener_2.min_chunk_size * self.audio_listener_2.WHISPER_SAMPLERATE))
             self.audio_mixer.start()
         else:
             # We use one device, puts the results directly to the audio_queue.
-            self.audio_listener = AudioListener(min_chunk_size, dev_info_1, self.audio_queue)
+            self.audio_listener = AudioListener(min_chunk_size, self.selected_device_1_info, self.audio_queue)
             self.audio_listener.start()
             
         return True
@@ -747,17 +853,10 @@ class AudioListener:
 
         self.WHISPER_SAMPLERATE = 16000
 
-        self.device_channels = input_device_info.channels
-        self.device_rate = int(input_device_info.samplerate)
+        self.device_channels = input_device_info.target_channels
+        self.device_rate = int(input_device_info.target_samplerate)
 
         self.resample_stream = None
-        self.downmix, self.resample = self.check_needed_processing()
-
-        if not self.downmix:
-            self.device_channels = 1
-
-        if not self.resample:
-            self.device_rate = self.WHISPER_SAMPLERATE
 
         self.in_stream_block_dur = input_device_info.block_dur
         self.blocksize = int(self.device_rate * self.in_stream_block_dur)
@@ -770,34 +869,6 @@ class AudioListener:
         self.audio_thread = None
         self.is_running = False
 
-    def check_input_settings(self, device, channels, samplerate):
-        try:
-            sd.check_input_settings(
-                device=device,
-                channels=channels,
-                samplerate=samplerate,
-                dtype="float32"
-            )
-        except Exception:
-            return False
-        return True
-
-    def check_needed_processing(self):
-        # No processing needed if these settings are accepted
-        if self.check_input_settings(self.input_device_info.index, 1, self.WHISPER_SAMPLERATE):
-            return False, False
-
-        # Only downmix needed if 16kHz samplerate is accepted
-        if self.check_input_settings(self.input_device_info.index, self.device_channels, self.WHISPER_SAMPLERATE):
-            return True, False
-
-        # Only resample needed if mono is accepted
-        if self.check_input_settings(self.input_device_info.index, 1, self.device_rate):
-            return False, True
-
-        # Both downmix and resample needed
-        return True, True
-    
     def pause_stream(self):
         if self.stream and self.stream.active:
             self.stream.stop()
@@ -856,8 +927,8 @@ class AudioListener:
 
         conc = np.concatenate(out)
 
-        mono = self.downmix_mono(conc) if self.downmix else conc
-        mono16k = self.resample_to_whisper(mono) if self.resample else mono
+        mono = self.downmix_mono(conc) if self.input_device_info.downmix_needed else conc
+        mono16k = self.resample_to_whisper(mono) if self.input_device_info.resample_needed else mono
 
         return mono16k
 
@@ -882,7 +953,7 @@ class AudioListener:
             ) as stream:
                 self.stream = stream
 
-                if self.resample:
+                if self.input_device_info.resample_needed:
                     import soxr
                     self.resample_stream = soxr.ResampleStream(self.device_rate, self.WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
 
@@ -893,7 +964,7 @@ class AudioListener:
 
                     self.result_queue.put(chunk)
 
-                if self.resample:
+                if self.input_device_info.resample_needed:
                     tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
                     self.result_queue.put(tail)
                     self.resample_stream = None

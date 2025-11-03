@@ -364,16 +364,22 @@ class CaptionerUI:
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Non-speech probability\nthreshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.threshold_var = tk.StringVar(value="0.8")
-        self.threshold_entry = ttk.Entry(whisper_tab, textvariable=self.threshold_var)
-        self.threshold_entry.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.threshold_var = tk.DoubleVar(value=0.9)
+        self.threshold_slider = tk.Scale(whisper_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
+                                         command=lambda val: self.threshold_label.config(text=f"{float(val):.2f}"))
+        self.threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.threshold_label = ttk.Label(whisper_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
+        self.threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === Minimum chunk size ===
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Minimum chunk size (sec)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.min_chunk_size_var = tk.StringVar(value="0.6")
-        self.min_chunk_size_entry = ttk.Entry(whisper_tab, textvariable=self.min_chunk_size_var)
-        self.min_chunk_size_entry.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.min_chunk_size_var = tk.DoubleVar(value=0.6)
+        self.min_chunk_size_slider = tk.Scale(whisper_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.min_chunk_size_var,
+                                              command=lambda val: self.min_chunk_size_label.config(text=f"{float(val):.1f}"))
+        self.min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.min_chunk_size_label = ttk.Label(whisper_tab, text=f"{self.min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === Checkboxes ===
         row_idx = self.next_row(whisper_tab)
@@ -435,15 +441,15 @@ class CaptionerUI:
 
         # Slider
         self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_1_block_dur_change)
-        self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
 
         # Block size and duration label
-        self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0))
-        self.audio_device_block_dur_label_1.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2))
+        self.audio_device_block_dur_label_1.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
 
         # Use a Label widget for multiline read-only display
         row_idx = self.next_row(dev1_tab)
-        self.input_dev_info_label_1 = ttk.Label(dev1_tab, text="", relief="solid", padding=(4, 0))
+        self.input_dev_info_label_1 = ttk.Label(dev1_tab, text="", relief="solid", padding=(4, 2))
         self.input_dev_info_label_1.grid(row=row_idx, column=0, columnspan=3, sticky="new", padx=5, pady=5)
 
         # === Audio device 2 ===
@@ -473,15 +479,15 @@ class CaptionerUI:
 
         # Slider
         self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_2_block_dur_change)
-        self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
 
         # Block size and duration label
-        self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0), state="disabled")
-        self.audio_device_block_dur_label_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+        self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2), state="disabled")
+        self.audio_device_block_dur_label_2.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
 
         # Use a Label widget for multiline read-only display
         row_idx = self.next_row(dev2_tab)
-        self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", padding=(4, 0), state="disabled")
+        self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", padding=(4, 2), state="disabled")
         self.input_dev_info_label_2.grid(row=row_idx, column=0, columnspan=3, sticky="new", padx=5, pady=5)
 
         # --- Buttons ---
@@ -751,15 +757,8 @@ class CaptionerUI:
         if self.is_connected_to_server:
             return False
 
-        threshold, valid = str_to_float(self.threshold_var.get())
-        if not valid or not (0.0 <= threshold <= 1.0):
-            print("Error: Non-speech probability threshold must be a number between 0.0 and 1.0. Setting to default: 1.0")
-            threshold = 1.0
-
-        min_chunk_size, valid = str_to_float(self.min_chunk_size_var.get())
-        if not valid:
-            print("Error: Invalid minimum chunk size. Setting to default: 0.6")
-            min_chunk_size = 0.6
+        threshold = self.threshold_var.get()
+        min_chunk_size = self.min_chunk_size_var.get()
 
         port, valid = str_to_int(self.server_port_var.get())
         if not valid or not (0 < port < 65536):
@@ -815,11 +814,7 @@ class CaptionerUI:
         self.captions_overlay.start()
 
     def create_audio_listener(self) -> bool:
-        min_chunk_size, valid = str_to_float(self.min_chunk_size_var.get())
-        if not valid:
-            print("Error: Invalid minimum chunk size. Setting to default: 0.6")
-            min_chunk_size = 0.6
-
+        min_chunk_size = self.min_chunk_size_var.get()
         use_second_dev = self.use_second_audio_dev_var.get()
         if use_second_dev:
             self.audio_temp_queue_1 = queue.Queue()

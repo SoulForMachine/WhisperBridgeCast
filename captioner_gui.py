@@ -14,6 +14,8 @@ from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
+WHISPER_SAMPLERATE: int = 16000
+
 class InputDeviceCaps:
     def __init__(self, channels: int, samplerate: float, min_latency: float, max_latency: float, index: int):
         self.channels = channels
@@ -27,8 +29,6 @@ class InputDeviceCaps:
 
 class InputDeviceInfo:
     def __init__(self, name: str, api: str, caps: InputDeviceCaps):
-        self.WHISPER_SAMPLERATE = 16000
-
         self.name = name
         self.api = api
         self.channels = caps.channels
@@ -39,17 +39,23 @@ class InputDeviceInfo:
 
         self.downmix_needed, self.resample_needed = self.check_needed_processing()
         self.target_channels = self.channels if self.downmix_needed else 1
-        self.target_samplerate = self.samplerate if self.resample_needed else self.WHISPER_SAMPLERATE
+        self.target_samplerate = self.samplerate if self.resample_needed else WHISPER_SAMPLERATE
 
         self.choose_safe_block_dur()
 
     def check_input_settings(self, device, channels, samplerate):
+        settings = None
+        if self.api == "Windows WASAPI":
+            # For WASAPI, we want to allow other apps to access the mic, and to auto-convert to float32 if necessary.
+            settings = sd.WasapiSettings(exclusive=False, auto_convert=True)
+
         try:
             sd.check_input_settings(
                 device=device,
                 channels=channels,
                 samplerate=samplerate,
-                dtype="float32"
+                dtype="float32",
+                extra_settings=settings
             )
         except Exception:
             return False
@@ -57,11 +63,11 @@ class InputDeviceInfo:
 
     def check_needed_processing(self):
         # No processing needed if these settings are accepted
-        if self.check_input_settings(self.index, 1, self.WHISPER_SAMPLERATE):
+        if self.check_input_settings(self.index, 1, WHISPER_SAMPLERATE):
             return False, False
 
         # Only downmix needed if 16kHz samplerate is accepted
-        if self.check_input_settings(self.index, self.channels, self.WHISPER_SAMPLERATE):
+        if self.check_input_settings(self.index, self.channels, WHISPER_SAMPLERATE):
             return True, False
 
         # Only resample needed if mono is accepted
@@ -417,10 +423,6 @@ class CaptionerUI:
         self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_combo_1.set(dev_name)
 
-        # Use a Label widget for multiline read-only display
-        self.input_dev_info_label_1 = ttk.Label(dev1_tab, text="", relief="solid", padding=(4, 0))
-        self.input_dev_info_label_1.grid(row=row_idx, rowspan=3, column=3, sticky="new", padx=5, pady=5)
-
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_host_api_combo_1 = ttk.Combobox(dev1_tab, values=[], state="readonly")
@@ -432,52 +434,55 @@ class CaptionerUI:
         ttk.Label(dev1_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         # Slider
-        self.audio_device_block_dur_slider_var_1 = tk.DoubleVar(value=0.5)
-        self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.audio_device_block_dur_slider_var_1, command=self.on_audio_device_1_block_dur_change)
+        self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_1_block_dur_change)
         self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
 
         # Block size and duration label
         self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0))
         self.audio_device_block_dur_label_1.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
 
+        # Use a Label widget for multiline read-only display
+        row_idx = self.next_row(dev1_tab)
+        self.input_dev_info_label_1 = ttk.Label(dev1_tab, text="", relief="solid", padding=(4, 0))
+        self.input_dev_info_label_1.grid(row=row_idx, column=0, columnspan=3, sticky="new", padx=5, pady=5)
+
         # === Audio device 2 ===
         dev2_tab = ttk.Frame(devices_notebook, padding=10)
         devices_notebook.add(dev2_tab, text="Device 2")
 
-        # Checkbox for enabling the second device
         row_idx = self.next_row(dev2_tab)
-        self.use_second_audio_dev_var = tk.BooleanVar(value=False)
-        self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
-        self.use_second_audio_dev_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
-
-        row_idx = self.next_row(dev2_tab)
-        ttk.Label(dev2_tab, text="Name").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        ttk.Label(dev2_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_combo_2 = ttk.Combobox(dev2_tab, values=device_list, width=dev_combo_width, state="disabled")
         self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_combo_2.set(dev_name)
 
-        # Use a Label widget for multiline read-only display
-        self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", state="disabled")
-        self.input_dev_info_label_2.grid(row=row_idx, rowspan=3, column=3, sticky="new", padx=5, pady=5)
+        # Checkbox for enabling the second device
+        self.use_second_audio_dev_var = tk.BooleanVar(value=False)
+        self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
+        self.use_second_audio_dev_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(dev2_tab)
-        ttk.Label(dev2_tab, text="Host API").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        ttk.Label(dev2_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_host_api_combo_2 = ttk.Combobox(dev2_tab, values=[], state="disabled")
         self.audio_device_host_api_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_2_selection_change)
 
         # Block duration / size
         row_idx = self.next_row(dev2_tab)
-        ttk.Label(dev2_tab, text="Block").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        ttk.Label(dev2_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         # Slider
-        self.audio_device_block_dur_slider_var_2 = tk.DoubleVar(value=0.5)
-        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.audio_device_block_dur_slider_var_2, command=self.on_audio_device_2_block_dur_change, state="disabled")
+        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_2_block_dur_change)
         self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
 
         # Block size and duration label
         self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="solid", justify="left", anchor="w", padding=(4, 0), state="disabled")
         self.audio_device_block_dur_label_2.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+
+        # Use a Label widget for multiline read-only display
+        row_idx = self.next_row(dev2_tab)
+        self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", padding=(4, 0), state="disabled")
+        self.input_dev_info_label_2.grid(row=row_idx, column=0, columnspan=3, sticky="new", padx=5, pady=5)
 
         # --- Buttons ---
         row_idx = self.next_row()
@@ -492,6 +497,7 @@ class CaptionerUI:
         self.audio_device_combo_1.event_generate("<<ComboboxSelected>>")
         self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
         self.audio_device_combo_2.event_generate("<<ComboboxSelected>>")
+        self.audio_device_block_dur_slider_2.config(state="disabled")   # Disable it here because its value needs to be set first
 
         root.protocol("WM_DELETE_WINDOW", self.quit)
 
@@ -631,12 +637,26 @@ class CaptionerUI:
         self.update_selected_devices_label()
 
     def format_device_info_text(self, dev_info: InputDeviceInfo):
+        target_ch = 1
+        target_sr = WHISPER_SAMPLERATE
+
         info_text = (
             f"Index: {dev_info.index}\n"
-            f"Channels: {dev_info.channels}" + (" (downmix to mono)" if dev_info.downmix_needed else "") + "\n"
-            f"Samplerate: {int(dev_info.samplerate)}" + (" (resample to 16kHz)" if dev_info.resample_needed else "") + "\n"
-            f"Latency range: {dev_info.min_latency:.3f} - {dev_info.max_latency:.3f}"
+            f"Channels: {dev_info.channels}"
+            + (
+                f" ({'software' if dev_info.downmix_needed else 'system'} downmix → {target_ch}ch)"
+                if dev_info.channels != target_ch else ""
+            )
+            + "\n"
+            f"Samplerate: {int(dev_info.samplerate)} Hz"
+            + (
+                f" ({'software' if dev_info.resample_needed else 'system'} resample → {target_sr/1000:.0f} kHz)"
+                if dev_info.samplerate != target_sr else ""
+            )
+            + "\n"
+            f"Latency range: {dev_info.min_latency:.3f} – {dev_info.max_latency:.3f} s"
         )
+
         return info_text
 
     def on_audio_device_host_api_1_selection_change(self, event):
@@ -657,7 +677,7 @@ class CaptionerUI:
             to=max_allowed,
             resolution=resolution
         )
-        self.audio_device_block_dur_slider_var_1.set((min_allowed + max_allowed) / 2.0)
+        self.audio_device_block_dur_slider_1.set((min_allowed + max_allowed) / 2.0)
 
     def on_audio_device_2_selection_change(self, event):
         dev_name = self.audio_device_combo_2.get()
@@ -685,11 +705,11 @@ class CaptionerUI:
             to=max_allowed,
             resolution=resolution
         )
-        self.audio_device_block_dur_slider_var_2.set((min_allowed + max_allowed) / 2.0)
+        self.audio_device_block_dur_slider_2.set((min_allowed + max_allowed) / 2.0)
 
     def on_audio_device_1_block_dur_change(self, value):
         dev_info = self.selected_device_1_info
-        dev_info.set_block_dur(self.audio_device_block_dur_slider_var_1.get())
+        dev_info.set_block_dur(self.audio_device_block_dur_slider_1.get())
         info_text = (
             f"Duration: {dev_info.block_dur:.4f} s\n"
             f"Size: {dev_info.block_size} frames"
@@ -698,7 +718,7 @@ class CaptionerUI:
 
     def on_audio_device_2_block_dur_change(self, value):
         dev_info = self.selected_device_2_info
-        dev_info.set_block_dur(self.audio_device_block_dur_slider_var_2.get())
+        dev_info.set_block_dur(self.audio_device_block_dur_slider_2.get())
         info_text = (
             f"Duration: {dev_info.block_dur:.4f} s\n"
             f"Size: {int(dev_info.block_size)} frames"
@@ -851,8 +871,6 @@ class AudioListener:
         self.min_chunk_size = min_chunk_size
         self.input_device_info = input_device_info
 
-        self.WHISPER_SAMPLERATE = 16000
-
         self.device_channels = input_device_info.target_channels
         self.device_rate = int(input_device_info.target_samplerate)
 
@@ -942,6 +960,14 @@ class AudioListener:
         )
         print(print_info, flush=True)
 
+        settings = None
+        if self.input_device_info.api == "Windows WASAPI":
+            import pythoncom
+            pythoncom.CoInitialize()
+
+            # For WASAPI, we want to allow other apps to access the mic, and to auto-convert to float32 if necessary.
+            settings = sd.WasapiSettings(exclusive=False, auto_convert=True)
+
         try:
             with sd.InputStream(
                 samplerate=self.device_rate,
@@ -949,13 +975,14 @@ class AudioListener:
                 dtype="float32",
                 blocksize=self.blocksize,
                 callback=self.audio_callback,
-                device=self.input_device_info.index
+                device=self.input_device_info.index,
+                extra_settings=settings
             ) as stream:
                 self.stream = stream
 
                 if self.input_device_info.resample_needed:
                     import soxr
-                    self.resample_stream = soxr.ResampleStream(self.device_rate, self.WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
+                    self.resample_stream = soxr.ResampleStream(self.device_rate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
 
                 while not self.stop_event.is_set():
                     chunk = self.receive_audio_chunk()
@@ -970,6 +997,9 @@ class AudioListener:
                     self.resample_stream = None
         except Exception as e:
             logger.error(f"Audio stream error: {e}")
+        finally:
+            if self.input_device_info.api == "Windows WASAPI":
+                pythoncom.CoUninitialize()
 
 
 class AudioMixer:

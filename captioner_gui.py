@@ -80,37 +80,44 @@ class InputDeviceInfo:
     def choose_safe_block_dur(
         self,
         min_block_dur_floor: float = 0.005,   # absolute min 5 ms
-        preferred_upper_bound: float = 0.05  # don't pick > 50 ms for realtime
+        preferred_upper_bound: float = 0.05   # don't pick > 50 ms for realtime
     ) -> Tuple[float, int, Tuple[float, float]]:
         """
         Return (block_dur_seconds, blocksize_frames, (min_allowed, max_allowed)).
 
         - Uses device low/high latencies as guidance.
+        - Adjusts preferred block duration based on host API.
         - Enforces practical lower/upper limits for realtime streaming.
         """
-        default_low_input_latency: float = self.min_latency
-        default_high_input_latency: float = self.max_latency
-        samplerate: int = int(self.target_samplerate)
+        low = float(self.min_latency or 0.0)
+        high = float(self.max_latency or 0.0)
 
-        low = float(default_low_input_latency or 0.0)
-        high = float(default_high_input_latency or 0.0)
-
-        # 1) Baseline allowed range
+        # Baseline allowed range
         min_allowed = max(low, min_block_dur_floor)
-        # if high is zero or useless, provide a reasonable max_allowed
         max_allowed = max(high, min_allowed * 4)
 
-        # 2) Preferred near-low but with breathing room and a sensible minimum
-        preferred = max(min_allowed * 1.5, 0.02)          # at least ~20ms preferred if possible
-        preferred = min(preferred, preferred_upper_bound) # don't exceed recommended realtime upper bound
-        preferred = clamp(preferred, min_allowed, max_allowed)
+        # Determine API-specific bias
+        api_name = self.api.lower()
+        if "wasapi" in api_name:
+            api_bias = 1.0       # keep preferred near low latency
+        elif "wdm-ks" in api_name:
+            api_bias = 1.1       # slightly higher to handle jitter
+        elif "directsound" in api_name:
+            api_bias = 2.0       # bigger blocks for stability
+        elif "mme" in api_name:
+            api_bias = 2.5       # legacy API, even bigger blocks
+        else:
+            api_bias = 1.5       # fallback
 
-        # 3) Ensure we have at least a few frames per block
-        blocksize = max(1, int(round(preferred * samplerate)))
-        # if blocksize is very small (<32 frames) bump it
-        if blocksize < 32:
-            blocksize = 32
-            preferred = blocksize / samplerate
+        # Preferred block duration
+        preferred = max(min_allowed * api_bias, 0.02)          # at least ~20ms
+        preferred = min(preferred, preferred_upper_bound)      # don't exceed upper bound
+        preferred = max(min_allowed, min(preferred, max_allowed)) # clamp to allowed range
+
+        # Compute blocksize in frames
+        samplerate: int = int(self.target_samplerate)
+        blocksize = max(32, int(round(preferred * samplerate)))   # at least 32 frames
+        preferred = blocksize / samplerate                        # adjust preferred to integer frames
 
         self.block_dur = preferred
         self.block_size = blocksize
@@ -124,7 +131,7 @@ class InputDeviceInfo:
 
 def sort_api_by_preference(api_list):
     if sys.platform.startswith("win"):
-        preferred_apis = ["Windows WDM-KS", "Windows WASAPI", "Windows DirectSound", "MME"]
+        preferred_apis = ["Windows WASAPI", "Windows WDM-KS", "Windows DirectSound", "MME"]
     elif sys.platform == "darwin":
         preferred_apis = ["Core Audio"]
     else:  # Linux
@@ -656,11 +663,11 @@ class CaptionerUI:
             + "\n"
             f"Samplerate: {int(dev_info.samplerate)} Hz"
             + (
-                f" ({'software' if dev_info.resample_needed else 'system'} resample → {target_sr/1000:.0f} kHz)"
+                f" ({'software' if dev_info.resample_needed else 'system'} resample → {target_sr / 1000:.0f} kHz)"
                 if dev_info.samplerate != target_sr else ""
             )
             + "\n"
-            f"Latency range: {dev_info.min_latency:.3f} – {dev_info.max_latency:.3f} s"
+            f"Latency range: {dev_info.min_latency * 1000:.0f} – {dev_info.max_latency * 1000:.0f} ms"
         )
 
         return info_text
@@ -676,14 +683,12 @@ class CaptionerUI:
 
         min_allowed = dev_info.min_block_dur_allowed
         max_allowed = dev_info.max_block_dur_allowed
-        dec_places = min(4, max(count_decimal_places(min_allowed), count_decimal_places(max_allowed)))
-        resolution = 10 ** -dec_places
         self.audio_device_block_dur_slider_1.config(
             from_=min_allowed,
             to=max_allowed,
-            resolution=resolution
+            resolution=0.001
         )
-        self.audio_device_block_dur_slider_1.set((min_allowed + max_allowed) / 2.0)
+        self.audio_device_block_dur_slider_1.set(dev_info.block_dur)
 
     def on_audio_device_2_selection_change(self, event):
         dev_name = self.audio_device_combo_2.get()
@@ -704,20 +709,18 @@ class CaptionerUI:
 
         min_allowed = dev_info.min_block_dur_allowed
         max_allowed = dev_info.max_block_dur_allowed
-        dec_places = min(4, max(count_decimal_places(min_allowed), count_decimal_places(max_allowed)))
-        resolution = 10 ** -dec_places
         self.audio_device_block_dur_slider_2.config(
             from_=min_allowed,
             to=max_allowed,
-            resolution=resolution
+            resolution=0.001
         )
-        self.audio_device_block_dur_slider_2.set((min_allowed + max_allowed) / 2.0)
+        self.audio_device_block_dur_slider_2.set(dev_info.block_dur)
 
     def on_audio_device_1_block_dur_change(self, value):
         dev_info = self.selected_device_1_info
         dev_info.set_block_dur(self.audio_device_block_dur_slider_1.get())
         info_text = (
-            f"Duration: {dev_info.block_dur:.4f} s\n"
+            f"Duration: {dev_info.block_dur * 1000:.0f} ms\n"
             f"Size: {dev_info.block_size} frames"
         )
         self.audio_device_block_dur_label_1.config(text=info_text)
@@ -726,7 +729,7 @@ class CaptionerUI:
         dev_info = self.selected_device_2_info
         dev_info.set_block_dur(self.audio_device_block_dur_slider_2.get())
         info_text = (
-            f"Duration: {dev_info.block_dur:.4f} s\n"
+            f"Duration: {dev_info.block_dur * 1000:.0f} ms\n"
             f"Size: {int(dev_info.block_size)} frames"
         )
         self.audio_device_block_dur_label_2.config(text=info_text)

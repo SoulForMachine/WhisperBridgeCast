@@ -1,4 +1,20 @@
-numpy==2.3.3
-Requests==2.32.5
-sounddevice==0.5.2
-soundfile==0.13.1
+numpy
+Requests
+sounddevice
+soundfile
+tkinter
+
+# Deep learning backend
+torch
+torchvision
+torchaudio
+
+# Whisper
+faster_whisper
+librosa
+
+# Hugging Face Transformers and dependencies
+transformers
+datasets
+sentencepiece
+sacremoses

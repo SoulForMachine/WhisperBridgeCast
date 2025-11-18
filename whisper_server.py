@@ -1,6 +1,5 @@
 import socket
 import captioner_common as ccmn
-from transformers import MarianTokenizer, MarianMTModel
 from urllib.parse import urlparse, parse_qs
 import multiprocessing as mp
 
@@ -32,8 +31,6 @@ class WhisperServerParams:
         # Language and task
         self.language = 'auto'
         self.task = 'transcribe'
-        self.enable_translation = True
-        self.target_language = ""
 
         # Backend
         self.backend = 'faster-whisper'
@@ -70,6 +67,21 @@ class WhisperOnline:
         for key, value in client_params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+
+        params.language = {
+            "English": "en",
+            "German": "de",
+            "Serbian": "sr",
+        }.get(client_params.get("language"), "auto")
+
+        if (
+            client_params.get("enable_translation") is True
+            and client_params.get("target_language") == "English"
+            and client_params.get("translation_engine") == "Whisper"
+        ):
+            params.task = "translate"
+        else:
+            params.task = "transcribe"
 
         wo.set_logging(params, logger, other="")
 
@@ -121,9 +133,165 @@ class ASRProcessor:
 ########## Translator
 
 class Translator:
-    def __init__(self, model_name, src_lang, dst_lang, source_queue, result_queue, only_complete_sent: bool):
-        self.tokenizer = MarianTokenizer.from_pretrained(model_name)
-        self.translator = MarianMTModel.from_pretrained(model_name)
+    class Engine:
+        NONE = "none"
+        MARIANMT = "MarianMT"
+        NLLB = "NLLB"
+        EUROLLM = "EuroLLM"
+        GOOGLE_GEMINI = "Google Gemini"
+
+    class MarianMT:
+        def __init__(self, src_lang: str, target_lang: str):
+            from transformers import MarianTokenizer, MarianMTModel
+
+            language_pairs = {
+                ("English", "Serbian Cyrillic"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
+                ("English", "Serbian Latin"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
+                ("English", "German"): "Helsinki-NLP/opus-mt-en-de",
+                ("German", "English"): "Helsinki-NLP/opus-mt-de-en",
+            }
+            model_name = language_pairs.get((src_lang, target_lang))
+            if model_name is None:
+                raise ValueError(f"MarianMT does not support translation from {src_lang} to {target_lang}.")
+
+            self.tokenizer = MarianTokenizer.from_pretrained(model_name)
+            self.translator = MarianMTModel.from_pretrained(model_name)
+            self.target_lang_token = {
+                "Serbian Cyrillic": "srp_Cyrl",
+                "Serbian Latin": "srp_Latn",
+            }.get(target_lang, "")
+
+        def translate_text(self, text: str) -> str:
+            text_to_translate = f">>{self.target_lang_token}<< {text}" if self.target_lang_token else text
+            inputs = self.tokenizer(text_to_translate, return_tensors="pt", truncation=True)
+            translated = self.translator.generate(**inputs)
+            transl_text = self.tokenizer.decode(translated[0], skip_special_tokens=True)
+            return transl_text
+
+    class NLLB:
+        def __init__(self, src_lang: str, target_lang: str):
+            from transformers import NllbTokenizer, AutoModelForSeq2SeqLM, BitsAndBytesConfig
+
+            self.language_codes = {
+                "English": "eng_Latn",
+                "Serbian Cyrillic": "srp_Cyrl",
+                "German": "deu_Latn",
+            }
+            self.target_lang_token = self.language_codes[target_lang]
+
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                #bnb_4bit_use_double_quant=True,
+                #bnb_4bit_compute_dtype=torch.float16,
+                #bnb_4bit_quant_type="nf4",
+            )
+
+            model_name = "facebook/nllb-200-distilled-600M"
+            self.tokenizer = NllbTokenizer.from_pretrained(model_name, src_lang=self.language_codes[src_lang])
+            self.translator = AutoModelForSeq2SeqLM.from_pretrained(
+                model_name,
+                quantization_config=bnb_config,
+                device_map="auto"
+            )
+            #self.translator = self.translator.to("cuda")
+
+        def translate_text(self, text: str) -> str:
+            forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(self.target_lang_token)
+            inputs = self.tokenizer(text, return_tensors="pt", padding=True)
+            inputs = inputs.to(self.translator.device)
+            #inputs = inputs.to("cuda")
+
+            # Generate translation
+            translated_tokens = self.translator.generate(
+                **inputs,
+                forced_bos_token_id=forced_bos_token_id
+            )
+
+            # Decode
+            translation = self.tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+            print(f"Full output: {translation}", flush=True)
+            return translation
+
+    class EuroLLM:
+        def __init__(self, api_key, src_lang: str, target_lang: str):
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from huggingface_hub import login
+
+            login(token=api_key)
+
+            model_id = "utter-project/EuroLLM-1.7B"
+            self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=True)
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                token=True,
+                quantization_config=bnb_config,
+                device_map="auto"
+            )
+            #self.model = self.model.to("cuda")
+
+            self.src_lang = src_lang
+            self.target_lang = target_lang
+
+        def translate_text(self, text: str) -> str:
+            # Ensure the text ends with punctuation, otherwise the model may not respond correctly.
+            if not text.endswith(('.', '!', '?', ';')):
+                text += '...'
+            prompt = f"{self.src_lang}: {text} {self.target_lang}:"
+            inputs = self.tokenizer(prompt, return_tensors="pt")
+            inputs.to(self.model.device)
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=512,
+                #do_sample=False,      # Deterministic
+                #num_beams=5,          # Beam search
+                #early_stopping=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            transl_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Extract only the translated part
+            transl_text = transl_text[len(prompt):].strip()
+            return transl_text
+
+    class GoogleGemini:
+        def __init__(self, api_key, src_lang: str, target_lang: str):
+            from google import genai
+            from google.genai import types
+            self.genai = genai
+            self.types = types
+
+            # Set your key
+            os.environ["GEMINI_API_KEY"] = api_key
+            # Initialise client
+            self.client = self.genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            self.src_lang = src_lang
+            self.target_lang = target_lang
+
+        def translate_text(self, text: str) -> str:
+            try:
+                prompt = f"Translate the following text in {self.src_lang} into {self.target_lang}:\n\"{text}\""
+                max_output_tokens = max(2048, len(text.split()) * 10)
+                response = self.client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=self.types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=max_output_tokens
+                    )
+                )
+                transl_text = getattr(response, "text", None)
+                if transl_text is None:
+                    return f"[Translation Error]: {getattr(response.candidates[0], "finish_reason", None)}."
+                return transl_text.strip()
+            except Exception as e:
+                return f"[Translation Exception]: {e}."
+
+    def __init__(self, engine_id, engine_params, src_lang, dst_lang, source_queue, result_queue, only_complete_sent: bool):
+        self.engine_id = engine_id
+        self.engine_params = engine_params
+        self.engine = None
         self.src_lang = src_lang
         self.dst_lang = dst_lang
         self.source_queue = source_queue
@@ -143,7 +311,7 @@ class Translator:
                 self.current_text += ' '
             self.current_text += text
 
-    def get_sentence(self) -> str:
+    def get_sentence(self) -> tuple[str, bool]:
         text = self.current_text
         """
         Extracts the first sentence from text, keeping consecutive punctuation.
@@ -159,12 +327,12 @@ class Translator:
         self.current_text = match.group(3).lstrip()
         return (sentence, True)
 
-    def translate_text(self, text: str):
-        text_to_translate = f">>srp_Cyrl<< {text[0]}"
-        inputs = self.tokenizer(text_to_translate, return_tensors="pt", truncation=True)
-        translated = self.translator.generate(**inputs)
-        transl_text = self.tokenizer.decode(translated[0], skip_special_tokens=True)
-        self.result_queue.put((transl_text, text[1]))
+    def translate_and_send(self, text: tuple[str, bool]):
+        if self.engine is not None:
+            transl_text = self.engine.translate_text(text[0])
+            self.result_queue.put((transl_text, text[1]))
+        else:
+            self.result_queue.put(text)
 
     def start(self):
         if not self.is_running:
@@ -179,7 +347,25 @@ class Translator:
             self.transl_thread = None
             self.is_running = False
 
+    def initialize_engine(self):
+        self.engine = None
+
+        if self.src_lang != self.dst_lang:
+            try:
+                if self.engine_id == Translator.Engine.MARIANMT:
+                    self.engine = self.MarianMT(self.src_lang, self.dst_lang)
+                elif self.engine_id == Translator.Engine.GOOGLE_GEMINI:
+                    self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+                elif self.engine_id == Translator.Engine.NLLB:
+                    self.engine = self.NLLB(self.src_lang, self.dst_lang)
+                elif self.engine_id == Translator.Engine.EUROLLM:
+                    self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+            except Exception as e:
+                print(f"[Translator] Error initializing translation engine: {e}", flush=True)
+                self.engine = None
+
     def run(self):
+        self.initialize_engine()
         last_partial_len = 0
 
         while True:
@@ -189,7 +375,7 @@ class Translator:
             except queue.Empty:
                 if self.current_text != "":
                     print("[Translator] Timeout reached, flushing all current text.", flush=True)
-                    self.translate_text((self.current_text + "...", True))
+                    self.translate_and_send((self.current_text + "...", True))
                     self.current_text = ""
                     last_partial_len = 0
                 continue
@@ -207,11 +393,11 @@ class Translator:
 
                 if text != "":
                     if complete_sentence:
-                        self.translate_text(to_translate)
+                        self.translate_and_send(to_translate)
                         last_partial_len = 0
                     elif (not self.only_complete_sent) and (len(text) - last_partial_len > 50):
                         last_partial_len = len(text)
-                        self.translate_text(to_translate)
+                        self.translate_and_send(to_translate)
 
 ########## Zoom caption sender
 
@@ -343,8 +529,21 @@ class WhisperPipeline:
 
         zoom_url = client_params.get("zoom_url")
 
+        if client_params.get("enable_translation") is True:
+            transl_engine = client_params.get("translation_engine", Translator.Engine.MARIANMT)
+        else:
+            transl_engine = "none"
+
         print("Starting Translator thread...", flush=True)
-        self.translator = Translator("Helsinki-NLP/opus-mt-tc-base-en-sh", "en", "sr", self.asr_queue, self.transl_queue, only_complete_sent=bool(zoom_url))
+        self.translator = Translator(
+            transl_engine,
+            client_params.get("translation_params"),
+            client_params.get("language"),
+            client_params.get("target_language"),
+            self.asr_queue,
+            self.transl_queue,
+            only_complete_sent=bool(zoom_url)
+        )
         self.translator.start()
 
         print("Starting Caption sender thread...", flush=True)

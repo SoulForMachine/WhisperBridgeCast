@@ -336,7 +336,7 @@ class CaptionerUI:
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.lang_var = tk.StringVar(value="English")
-        self.lang_combo = ttk.Combobox(whisper_tab, textvariable=self.lang_var, values=["English", "Serbian"], state="readonly")
+        self.lang_combo = ttk.Combobox(whisper_tab, textvariable=self.lang_var, values=["English", "German", "Serbian"], state="readonly")
         self.lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper model ===
@@ -348,7 +348,7 @@ class CaptionerUI:
             "base.en", "base",
             "small.en", "distil-small.en", "small",
             "medium.en", "distil-medium.en", "medium",
-            "large-v1", "large-v2", "distil-large-v2", "large-v3", "distil-large-v3", "large", "large-v3-turbo", "turbo"
+            "large-v1", "large-v2", "distil-large-v2", "large-v3", "distil-large-v3", "distil-large-v3.5", "large", "large-v3-turbo", "turbo"
         ]
         self.model_combo = ttk.Combobox(whisper_tab, textvariable=self.model_var, values=model_options, state="readonly")
         self.model_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -410,9 +410,31 @@ class CaptionerUI:
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Target language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.target_lang_var = tk.StringVar(value="Serbian")
-        self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=["Serbian", "English"], state="readonly")
+        self.target_lang_var = tk.StringVar(value="Serbian Cyrillic")
+        target_langs = ["Serbian Cyrillic", "Serbian Latin", "English", "German"]
+        self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=target_langs, state="readonly")
         self.target_lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+
+        self.transl_engines = ["MarianMT", "NLLB", "EuroLLM", "Whisper", "Google Gemini"]
+        self.transl_engines_with_params = ["EuroLLM", "Google Gemini"]
+        row_idx = self.next_row(translation_tab)
+        ttk.Label(translation_tab, text="Translation engine").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_engine_var = tk.StringVar(value="MarianMT")
+        self.transl_engine_combo = ttk.Combobox(translation_tab, textvariable=self.transl_engine_var, values=self.transl_engines, state="readonly")
+        self.transl_engine_combo.bind("<<ComboboxSelected>>", self.on_transl_engine_selection_change)
+        self.transl_engine_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(translation_tab)
+        translation_tab.grid_columnconfigure(2, weight=1)
+        self.engine_params_frame = ttk.Frame(translation_tab, padding=10)
+        self.engine_params_frame.grid(row=row_idx, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        self.engine_params_frame.grid_columnconfigure(2, weight=1)
+        row_idx = self.next_row(self.engine_params_frame)
+        ttk.Label(self.engine_params_frame, text="API Key").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_api_key_var = tk.StringVar(value="")
+        self.transl_api_key_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_key_var)
+        self.transl_api_key_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.transl_engine_combo.event_generate("<<ComboboxSelected>>")
 
         # +++ Audio tab +++
         audio_tab = ttk.Frame(settings_notebook, padding=10)
@@ -623,8 +645,28 @@ class CaptionerUI:
     def on_enable_translation_toggle(self):
         if self.enable_translation_var.get():
             self.target_lang_combo.config(state="readonly")
+            self.transl_engine_combo.config(state="readonly")
+            for w in self.engine_params_frame.winfo_children():
+                w.config(state="normal")
         else:
             self.target_lang_combo.config(state="disabled")
+            self.transl_engine_combo.config(state="disabled")
+            for w in self.engine_params_frame.winfo_children():
+                w.config(state="disabled")
+
+    def on_transl_engine_selection_change(self, event):
+        transl_model = self.transl_engine_var.get()
+        if transl_model in self.transl_engines_with_params:
+            self.engine_params_frame.grid()
+        else:
+            self.engine_params_frame.grid_remove()
+
+        if transl_model == "Google Gemini":
+            self.transl_api_key_var.set("")
+        elif transl_model == "EuroLLM":
+            self.transl_api_key_var.set("")
+        else:
+            self.transl_api_key_var.set("")
 
     def on_enable_second_audio_device(self):
         if self.use_second_audio_dev_var.get():
@@ -768,14 +810,22 @@ class CaptionerUI:
             print("Error: Invalid port number. Setting to default: 5000")
             port = 5000
 
+        transl_engine = self.transl_engine_var.get()
+        if transl_engine in self.transl_engines_with_params:
+            transl_params = { "api_key": self.transl_api_key_var.get().strip() }
+        else:
+            transl_params = {}
+
         params = {
             "zoom_url": self.zoom_url_var.get().strip(),
             "model": self.model_var.get(),
             "whisper_device": self.whisper_device_var.get(),
             "whisper_compute_type": self.whisper_compute_type_var.get(),
-            "language": "en" if self.lang_var.get() == "English" else "sr",
+            "language": self.lang_var.get(),
             "enable_translation": bool(self.enable_translation_var.get()),
             "target_language": self.target_lang_var.get(),
+            "translation_engine": transl_engine,
+            "translation_params": transl_params,
             "nsp_threshold": threshold,
             "min_chunk_size": min_chunk_size,
             "log_level": "INFO",

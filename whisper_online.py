@@ -814,10 +814,12 @@ def asr_factory(args, logfile=sys.stderr):
         # Only for FasterWhisperASR and WhisperTimestampedASR
         size = args.model
         t = time.time()
-        logger.info(f"Loading Whisper {size} model for {args.language}...")
+        logger.info(f"Loading Whisper {size} model...")
         logger.info(f"  - device: {args.whisper_device}")
         logger.info(f"  - compute type: {args.whisper_compute_type}")
         logger.info(f"  - nsp threshold: {nsp_threshold}")
+        logger.info(f"  - language: {args.language}")
+        logger.info(f"  - task: {args.task}")
         asr = asr_cls(modelsize=size, lan=args.language, cache_dir=args.model_cache_dir, model_dir=args.model_dir, no_speech_prob_threshold=nsp_threshold, device=args.whisper_device, compute_type=args.whisper_compute_type)
         e = time.time()
         logger.info(f"done. It took {round(e-t,2)} seconds.")

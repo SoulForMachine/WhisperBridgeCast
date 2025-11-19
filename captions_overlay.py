@@ -53,7 +53,7 @@ class CaptionsOverlay:
 
         # Internal state
         self.visual_lines = []  # [{"lines": [canvas_ids], "y": y, "height": pixels}]
-        self.pending_text = None  # text waiting to be added
+        self.pending_text = []  # text waiting to be added
         self.scrolling = False
 
         # Set fixed window size
@@ -126,45 +126,49 @@ class CaptionsOverlay:
 
     # --- Public API ---
     def add_text(self, text):
-        if self.scrolling:
-            # Queue text if scrolling is in progress
-            self.pending_text = text
-        else:
-            self._process_new_text(text)
+        self.pending_text.append((text, "add"))
+        self._process_new_text()
 
-    def set_last_text(self, text):
-        if self.visual_lines:
-            # Remove last item's canvas lines
-            for cid in self.visual_lines[-1]["lines"]:
-                self.canvas.delete(cid)
-            # Remove from internal list
-            self.visual_lines = self.visual_lines[:-1]
-        # Add new text (may scroll old lines if needed)
-        self.add_text(text)
+    def update_last_text(self, text):
+        self.pending_text.append((text, "update"))
+        self._process_new_text()
 
     def destroy(self):
         self.overlay_wnd.destroy()
 
     # --- Internal ---
-    def _process_new_text(self, text):
-        wrapped_lines = self.wrap_text(text)
-        new_item_height = len(wrapped_lines) * self.line_height
+    def _process_new_text(self):
+        if self.scrolling:
+            return
 
-        # Compute remaining scroll based on bottom-most old line
-        if self.visual_lines:
-            old_bottom = max(vl["y"] + vl["height"] for vl in self.visual_lines)
-        else:
-            old_bottom = 0
+        while self.pending_text:
+            text, op = self.pending_text.pop(0)
+            wrapped_lines = self.wrap_text(text)
+            new_item_height = len(wrapped_lines) * self.line_height
 
-        remaining_scroll = max(0, old_bottom + new_item_height - (self.height - self.padding))
+            if op == "update" and self.visual_lines:
+                # Remove last item's canvas lines
+                for cid in self.visual_lines[-1]["lines"]:
+                    self.canvas.delete(cid)
+                # Remove from internal list
+                self.visual_lines = self.visual_lines[:-1]
 
-        if remaining_scroll > 0:
-            # Need to scroll old lines first
-            self.scrolling = True
-            self._scroll_old_lines(remaining_scroll, new_item_height, wrapped_lines)
-        else:
-            # Enough space, add immediately
-            self._draw_new_lines(wrapped_lines)
+            # Compute remaining scroll based on bottom-most old line
+            if self.visual_lines:
+                old_bottom = max(vl["y"] + vl["height"] for vl in self.visual_lines)
+            else:
+                old_bottom = 0
+
+            remaining_scroll = max(0, old_bottom + new_item_height - (self.height - self.padding))
+
+            if remaining_scroll > 0:
+                # Need to scroll old lines first
+                self.scrolling = True
+                self._scroll_old_lines(remaining_scroll, new_item_height, wrapped_lines)
+                break
+            else:
+                # Enough space, add immediately
+                self._draw_new_lines(wrapped_lines)
 
     def _draw_new_lines(self, wrapped_lines):
         y = self.height - self.padding - len(wrapped_lines) * self.line_height
@@ -183,10 +187,7 @@ class CaptionsOverlay:
         if remaining_scroll <= 0:
             self.scrolling = False
             self._draw_new_lines(wrapped_lines)
-            if self.pending_text:
-                text = self.pending_text
-                self.pending_text = None
-                self.add_text(text)
+            self._process_new_text()
             return
 
         frame_delay = 20  # ms
@@ -210,10 +211,7 @@ class CaptionsOverlay:
                 vl["y"] += adjustment
             self.scrolling = False
             self._draw_new_lines(wrapped_lines)
-            if self.pending_text:
-                text = self.pending_text
-                self.pending_text = None
-                self.add_text(text)
+            self._process_new_text()
         else:
             self._cleanup_lines()
             self.overlay_wnd.after(frame_delay, lambda: self._scroll_old_lines(remaining_scroll,

@@ -1219,8 +1219,6 @@ class WhisperClient:
 
 
 class CaptionsReceiver:
-    font_size = 18
-
     def __init__(self, root_wnd, source_queue, gui_queue):
         self.source_queue = source_queue
         self.gui_queue = gui_queue
@@ -1252,7 +1250,7 @@ class CaptionsReceiver:
     def send_complete(self, text):
         if self.overlay:
             if self.last_partial:
-                self.overlay.set_last_text(text)
+                self.overlay.update_last_text(text)
                 self.last_partial = False
             else:
                 self.overlay.add_text(text)
@@ -1260,7 +1258,7 @@ class CaptionsReceiver:
     def send_partial(self, text):
         if self.overlay:
             if self.last_partial:
-                self.overlay.set_last_text(text)
+                self.overlay.update_last_text(text)
             else:
                 self.overlay.add_text(text)
                 self.last_partial = True

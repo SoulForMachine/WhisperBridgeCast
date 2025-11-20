@@ -209,7 +209,6 @@ class Translator:
 
             # Decode
             translation = self.tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
-            print(f"Full output: {translation}", flush=True)
             return translation
 
     class EuroLLM:
@@ -302,20 +301,20 @@ class Translator:
         self.transl_thread = None
         self.is_running = False
 
+        self.SEND_PARTIAL_LEN = 50  # characters
+
     FLUSH_TIMEOUT = 6  # seconds
 
     def add_text(self, text: str):
         # Append new text to the current buffer.
         if text != "":
-            if self.current_text != "" and self.current_text[-1] != ' ' and text[0] != ' ':
-                self.current_text += ' '
             self.current_text += text
 
     def get_sentence(self) -> tuple[str, bool]:
         text = self.current_text
         """
         Extracts the first sentence from text, keeping consecutive punctuation.
-        Returns the sentence or an empty string if no sentence-ending punctuation is found.
+        Returns the current text or an empty string if no sentence-ending punctuation is found.
         """
         # Regex: sentence until first [.!?], include all consecutive [.!?]
         match = re.search(r'^(.*?[.!?]+)(\s*)(.*)$', text, flags=re.S)
@@ -352,14 +351,15 @@ class Translator:
 
         if self.src_lang != self.dst_lang:
             try:
-                if self.engine_id == Translator.Engine.MARIANMT:
-                    self.engine = self.MarianMT(self.src_lang, self.dst_lang)
-                elif self.engine_id == Translator.Engine.GOOGLE_GEMINI:
-                    self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.dst_lang)
-                elif self.engine_id == Translator.Engine.NLLB:
-                    self.engine = self.NLLB(self.src_lang, self.dst_lang)
-                elif self.engine_id == Translator.Engine.EUROLLM:
-                    self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+                match self.engine_id:
+                    case Translator.Engine.MARIANMT:
+                        self.engine = self.MarianMT(self.src_lang, self.dst_lang)
+                    case Translator.Engine.GOOGLE_GEMINI:
+                        self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+                    case Translator.Engine.NLLB:
+                        self.engine = self.NLLB(self.src_lang, self.dst_lang)
+                    case Translator.Engine.EUROLLM:
+                        self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.dst_lang)
             except Exception as e:
                 print(f"[Translator] Error initializing translation engine: {e}", flush=True)
                 self.engine = None
@@ -395,9 +395,13 @@ class Translator:
                     if complete_sentence:
                         self.translate_and_send(to_translate)
                         last_partial_len = 0
-                    elif (not self.only_complete_sent) and (len(text) - last_partial_len > 50):
-                        last_partial_len = len(text)
-                        self.translate_and_send(to_translate)
+                    elif not self.only_complete_sent:
+                        if (
+                            self.engine is None
+                            or len(text) - last_partial_len >= self.SEND_PARTIAL_LEN
+                        ):
+                            last_partial_len = len(text)
+                            self.translate_and_send(to_translate)
 
 ########## Zoom caption sender
 

@@ -188,6 +188,7 @@ class Translator:
 
             model_name = "facebook/nllb-200-distilled-600M"
             self.tokenizer = NllbTokenizer.from_pretrained(model_name, src_lang=self.language_codes[src_lang])
+            self.forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(self.target_lang_token)
             self.translator = AutoModelForSeq2SeqLM.from_pretrained(
                 model_name,
                 quantization_config=bnb_config,
@@ -196,7 +197,6 @@ class Translator:
             #self.translator = self.translator.to("cuda")
 
         def translate_text(self, text: str) -> str:
-            forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(self.target_lang_token)
             inputs = self.tokenizer(text, return_tensors="pt", padding=True)
             inputs = inputs.to(self.translator.device)
             #inputs = inputs.to("cuda")
@@ -204,7 +204,7 @@ class Translator:
             # Generate translation
             translated_tokens = self.translator.generate(
                 **inputs,
-                forced_bos_token_id=forced_bos_token_id
+                forced_bos_token_id=self.forced_bos_token_id
             )
 
             # Decode
@@ -301,7 +301,7 @@ class Translator:
         self.transl_thread = None
         self.is_running = False
 
-        self.SEND_PARTIAL_LEN = 50  # characters
+        self.SEND_PARTIAL_LEN = 50  # Send partial text in increments of this many characters.
 
     FLUSH_TIMEOUT = 6  # seconds
 
@@ -406,10 +406,10 @@ class Translator:
 ########## Zoom caption sender
 
 class ZoomCaptionSender:
-    def __init__(self, source_queue, zoom_url, zoom_language="en"):
+    def __init__(self, source_queue, zoom_url, lang_code):
         self.source_queue = source_queue
         self.zoom_url = zoom_url
-        self.zoom_language = zoom_language
+        self.lang_code = lang_code
         self.caption_thread = None
         self.is_running = False
 
@@ -446,7 +446,7 @@ class ZoomCaptionSender:
 
             if self.zoom_url and complete:
                 # Build URL with lang + sequence params
-                url = f"{self.zoom_url}&lang={self.zoom_language}&seq={self.sequence}"
+                url = f"{self.zoom_url}&lang={self.lang_code}&seq={self.sequence}"
 
                 headers = {
                     "Content-Type": "plain/text",
@@ -488,9 +488,10 @@ class ZoomCaptionSender:
 ########## Caption sender: sends captions to the client
 
 class CaptionSender:
-    def __init__(self, source_queue, conn):
+    def __init__(self, source_queue, conn, lang_code):
         self.source_queue = source_queue
         self.conn = conn
+        self.lang_code = lang_code
         self.caption_thread = None
         self.is_running = False
 
@@ -517,7 +518,7 @@ class CaptionSender:
 
             ccmn.send_json(self.conn, {
                 "type": "translation",
-                "lang": "sr",
+                "lang": self.lang_code,
                 "text": text,
                 "complete": complete,
             })
@@ -533,17 +534,23 @@ class WhisperPipeline:
 
         zoom_url = client_params.get("zoom_url")
 
+        transl_params = client_params.get("translation_params")
+        language = client_params.get("language")
+        target_language = client_params.get("target_language")
+
         if client_params.get("enable_translation") is True:
             transl_engine = client_params.get("translation_engine", Translator.Engine.MARIANMT)
+            capt_lang = target_language
         else:
             transl_engine = "none"
+            capt_lang = language
 
         print("Starting Translator thread...", flush=True)
         self.translator = Translator(
             transl_engine,
-            client_params.get("translation_params"),
-            client_params.get("language"),
-            client_params.get("target_language"),
+            transl_params,
+            language,
+            target_language,
             self.asr_queue,
             self.transl_queue,
             only_complete_sent=bool(zoom_url)
@@ -551,12 +558,20 @@ class WhisperPipeline:
         self.translator.start()
 
         print("Starting Caption sender thread...", flush=True)
+        lang_code_map = {
+            "English": "en",
+            "German": "de",
+            "Serbian": "sr",
+            "Serbian Latin": "sr",
+            "Serbian Cyrilic": "sr",
+        }
+        capt_lang_code = lang_code_map.get(capt_lang, "en")
         if zoom_url:
             zoom_url = zoom_url.strip()
             self.transl_queue.put(("...", True))  # to warm up Zoom
-            self.caption_sender = ZoomCaptionSender(self.transl_queue, zoom_url, "sr")
+            self.caption_sender = ZoomCaptionSender(self.transl_queue, zoom_url, capt_lang_code)
         else:
-            self.caption_sender = CaptionSender(self.transl_queue, conn)
+            self.caption_sender = CaptionSender(self.transl_queue, conn, capt_lang_code)
         self.caption_sender.start()
 
         print("Starting ASR thread...", flush=True)

@@ -223,7 +223,7 @@ class CaptionsOverlay:
         new_visual_lines = []
         for vl in self.visual_lines:
             # bottom of the item
-            if vl["y"] + vl["height"] > 0:
+            if vl["y"] + vl["height"] > self.padding:
                 new_visual_lines.append(vl)
             else:
                 # remove all canvas IDs for this item

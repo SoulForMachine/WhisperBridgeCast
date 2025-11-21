@@ -13,6 +13,15 @@ import json
 import re
 
 
+def get_lang_code(lang: str) -> str:
+    lang_code_map = {
+        "English": "en",
+        "German": "de",
+        "Serbian": "sr",
+        "Serbian Latin": "sr",
+        "Serbian Cyrilic": "sr",
+    }
+    return lang_code_map.get(lang, "en")
 
 class WhisperServerParams:
     def __init__(self):
@@ -287,12 +296,12 @@ class Translator:
             except Exception as e:
                 return f"[Translation Exception]: {e}."
 
-    def __init__(self, engine_id, engine_params, src_lang, dst_lang, source_queue, result_queue, only_complete_sent: bool):
+    def __init__(self, engine_id, engine_params, src_lang, target_lang, source_queue, result_queue, only_complete_sent: bool):
         self.engine_id = engine_id
         self.engine_params = engine_params
         self.engine = None
         self.src_lang = src_lang
-        self.dst_lang = dst_lang
+        self.target_lang = target_lang
         self.source_queue = source_queue
         self.result_queue = result_queue
         self.only_complete_sent = only_complete_sent
@@ -301,30 +310,31 @@ class Translator:
         self.transl_thread = None
         self.is_running = False
 
-        self.SEND_PARTIAL_LEN = 50  # Send partial text in increments of this many characters.
+        import spacy
+        self.nlp = spacy.blank(get_lang_code(self.src_lang))
+        self.nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6  # seconds
+    SEND_PARTIAL_LEN = 50  # Send partial text in increments of this many characters.
 
     def add_text(self, text: str):
         # Append new text to the current buffer.
         if text != "":
             self.current_text += text
 
-    def get_sentence(self) -> tuple[str, bool]:
-        text = self.current_text
-        """
-        Extracts the first sentence from text, keeping consecutive punctuation.
-        Returns the current text or an empty string if no sentence-ending punctuation is found.
-        """
-        # Regex: sentence until first [.!?], include all consecutive [.!?]
-        match = re.search(r'^(.*?[.!?]+)(\s*)(.*)$', text, flags=re.S)
-        if not match:
-            # no complete sentence, return the current partial text
-            return (self.current_text, False)
+    def get_sentences(self) -> list[tuple[str, bool]]:
+        doc = self.nlp(self.current_text)
+        sentences = [(sent.text.strip(), True) for sent in doc.sents]
 
-        sentence = match.group(1).strip()
-        self.current_text = match.group(3).lstrip()
-        return (sentence, True)
+        if sentences:
+            last_sent = sentences[-1][0]
+            if not last_sent.endswith(('.', '!', '?')):
+                # last sentence is partial
+                sentences[-1] = (last_sent, False)
+                self.current_text = last_sent
+            else:
+                self.current_text = ""
+        return sentences
 
     def translate_and_send(self, text: tuple[str, bool]):
         if self.engine is not None:
@@ -349,17 +359,17 @@ class Translator:
     def initialize_engine(self):
         self.engine = None
 
-        if self.src_lang != self.dst_lang:
+        if self.src_lang != self.target_lang:
             try:
                 match self.engine_id:
                     case Translator.Engine.MARIANMT:
-                        self.engine = self.MarianMT(self.src_lang, self.dst_lang)
+                        self.engine = self.MarianMT(self.src_lang, self.target_lang)
                     case Translator.Engine.GOOGLE_GEMINI:
-                        self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+                        self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.target_lang)
                     case Translator.Engine.NLLB:
-                        self.engine = self.NLLB(self.src_lang, self.dst_lang)
+                        self.engine = self.NLLB(self.src_lang, self.target_lang)
                     case Translator.Engine.EUROLLM:
-                        self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.dst_lang)
+                        self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.target_lang)
             except Exception as e:
                 print(f"[Translator] Error initializing translation engine: {e}", flush=True)
                 self.engine = None
@@ -384,23 +394,22 @@ class Translator:
                 break
 
             self.add_text(text)
+            sentences = self.get_sentences()
 
-            complete_sentence = True
-            while complete_sentence:
-                to_translate = self.get_sentence()
-                text = to_translate[0]
+            for to_translate in sentences:
+                text_to_transl = to_translate[0]
                 complete_sentence = to_translate[1]
 
-                if text != "":
+                if text_to_transl != "":
                     if complete_sentence:
                         self.translate_and_send(to_translate)
                         last_partial_len = 0
                     elif not self.only_complete_sent:
                         if (
                             self.engine is None
-                            or len(text) - last_partial_len >= self.SEND_PARTIAL_LEN
+                            or len(text_to_transl) - last_partial_len >= self.SEND_PARTIAL_LEN
                         ):
-                            last_partial_len = len(text)
+                            last_partial_len = len(text_to_transl)
                             self.translate_and_send(to_translate)
 
 ########## Zoom caption sender
@@ -558,14 +567,7 @@ class WhisperPipeline:
         self.translator.start()
 
         print("Starting Caption sender thread...", flush=True)
-        lang_code_map = {
-            "English": "en",
-            "German": "de",
-            "Serbian": "sr",
-            "Serbian Latin": "sr",
-            "Serbian Cyrilic": "sr",
-        }
-        capt_lang_code = lang_code_map.get(capt_lang, "en")
+        capt_lang_code = get_lang_code(capt_lang)
         if zoom_url:
             zoom_url = zoom_url.strip()
             self.transl_queue.put(("...", True))  # to warm up Zoom

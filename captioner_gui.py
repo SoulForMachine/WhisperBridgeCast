@@ -10,7 +10,7 @@ import logging
 import captioner_common as ccmn
 from collections import defaultdict
 import captions_overlay
-from typing import Tuple
+from typing import Tuple, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -244,9 +244,10 @@ class CaptionerUI:
         self.is_connected_to_server = False
         self.selected_device_1_info = None
         self.selected_device_2_info = None
-        self.audio_listener = None
-        self.audio_listener_2 = None
+        self.audio_producer = None
+        self.audio_producer_2 = None
         self.audio_mixer = None
+        self.audio_producer_state_map = {}  # device_index -> "open" | "closed"
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
         self.audio_queue = None
@@ -263,7 +264,7 @@ class CaptionerUI:
             try:
                 lmbd = self.gui_queue.get()
                 if lmbd is not None:
-                    lmbd()
+                    self.root_wnd.after(0, lmbd)
             except Exception:
                 pass
 
@@ -563,75 +564,32 @@ class CaptionerUI:
 
     def toggle_connection(self):
         if self.is_connected_to_server:
-            if self.is_recording:
-                self.stop_captioner()
-                self.is_recording = False
-            self.connect_btn.config(state="disabled")
-            self.disconnect_from_server()
-            self.connect_btn.config(state="normal", text="Connect")
-            self.record_btn.config(state="disabled", text="Record")
+            self.on_disconnect_from_server()
         else:
-            self.connect_btn.config(state="disabled")
-            self.connect_btn.update_idletasks()
-            if self.connect_to_server():
-                self.connect_btn.config(text="Disconnect")
-                self.record_btn.config(state="normal")
-            self.connect_btn.config(state="normal")
+            self.on_connect_to_server()
 
     def toggle_recording(self):
         if self.is_recording:
-            self.stop_captioner()
-            self.record_btn.config(text="Record")
-            self.mute_btn.config(state="disabled", text="🔊")
-            self.mute_btn_2.config(state="disabled", text="🔊")
-            self.is_recording = False
-            self.update_selected_devices_label()
-            print("Recording stopped.")
+            self.on_stop_recording()
         else:
-            if self.use_second_audio_dev_var.get() and (self.audio_device_combo_1.get() == self.audio_device_combo_2.get()):
-                self.show_modal_message("Error", "When the second audio device is enabled, different audio devices must be selected.", self.root_wnd)
-                return
-
-            # Collect all values for debugging/demo purposes
-            print("Zoom URL:", self.zoom_url_var.get())
-            print("Audio device:", self.audio_device_combo_1.get())
-            if self.use_second_audio_dev_var.get():
-                print("Audio device 2:", self.audio_device_combo_2.get())
-            print("Whisper model:", self.model_var.get())
-            print("Whisper device:", self.whisper_device_var.get())
-            print("Whisper compute type:", self.whisper_compute_type_var.get())
-            print("Language:", self.lang_var.get())
-            print("Enable translation:", self.enable_translation_var.get())
-            print("Target language:", self.target_lang_var.get())
-            print("Threshold:", self.threshold_var.get())
-            print("Minimum chunk size:", self.min_chunk_size_var.get())
-            print("VAC enabled:", self.vac_var.get())
-            print("VAD enabled:", self.vad_var.get())
-
-            print("Running Captioner...")
-            if self.run_captioner():
-                self.record_btn.config(text="Stop")
-                self.mute_btn.config(state="normal")
-                if self.use_second_audio_dev_var.get():
-                    self.mute_btn_2.config(state="normal")
-                self.is_recording = True
+            self.on_start_recording()
 
     def toggle_mute(self):
-        if self.audio_listener:
-            if self.audio_listener.is_paused():
-                self.audio_listener.resume_stream()
+        if self.audio_producer:
+            if self.audio_producer.is_paused():
+                self.audio_producer.resume_stream()
                 self.mute_btn.config(text="🔊")
             else:
-                self.audio_listener.pause_stream()
+                self.audio_producer.pause_stream()
                 self.mute_btn.config(text="🔇")
 
     def toggle_mute_2(self):
-        if self.audio_listener_2:
-            if self.audio_listener_2.is_paused():
-                self.audio_listener_2.resume_stream()
+        if self.audio_producer_2:
+            if self.audio_producer_2.is_paused():
+                self.audio_producer_2.resume_stream()
                 self.mute_btn_2.config(text="🔊")
             else:
-                self.audio_listener_2.pause_stream()
+                self.audio_producer_2.pause_stream()
                 self.mute_btn_2.config(text="🔇")
 
     def quit(self):
@@ -641,6 +599,59 @@ class CaptionerUI:
             self.disconnect_from_server()
         self.root_wnd.quit()
         self.root_wnd.destroy()
+
+    def on_connect_to_server(self):
+        if not self.is_connected_to_server:
+            self.connect_btn.config(state="disabled")
+            self.connect_btn.update_idletasks()
+            self.connect_to_server()
+
+    def on_disconnect_from_server(self):
+        if self.is_connected_to_server:
+            if self.is_recording:
+                self.on_stop_recording()
+                self.is_recording = False
+            self.connect_btn.config(state="disabled")
+            self.disconnect_from_server()
+            self.connect_btn.config(state="normal", text="Connect")
+            self.record_btn.config(state="disabled", text="Record")
+
+    def on_start_recording(self):
+        if self.is_recording or not self.is_connected_to_server:
+            return
+
+        if self.use_second_audio_dev_var.get() and (self.audio_device_combo_1.get() == self.audio_device_combo_2.get()):
+            self.show_modal_message("Error", "When the second audio device is enabled, different audio devices must be selected.", self.root_wnd)
+            return
+
+        # Collect all values for debugging/demo purposes
+        print("Zoom URL:", self.zoom_url_var.get())
+        print("Audio device:", self.audio_device_combo_1.get())
+        if self.use_second_audio_dev_var.get():
+            print("Audio device 2:", self.audio_device_combo_2.get())
+        print("Whisper model:", self.model_var.get())
+        print("Whisper device:", self.whisper_device_var.get())
+        print("Whisper compute type:", self.whisper_compute_type_var.get())
+        print("Language:", self.lang_var.get())
+        print("Enable translation:", self.enable_translation_var.get())
+        print("Target language:", self.target_lang_var.get())
+        print("Threshold:", self.threshold_var.get())
+        print("Minimum chunk size:", self.min_chunk_size_var.get())
+        print("VAC enabled:", self.vac_var.get())
+        print("VAD enabled:", self.vad_var.get())
+
+        print("Running Captioner...")
+        self.create_audio_producer()
+
+    def on_stop_recording(self):
+        if self.is_recording:
+            self.stop_captioner()
+            self.record_btn.config(text="Record")
+            self.mute_btn.config(state="disabled", text="🔊")
+            self.mute_btn_2.config(state="disabled", text="🔊")
+            self.is_recording = False
+            self.update_selected_devices_label()
+            print("Recording stopped.")
 
     def on_enable_translation_toggle(self):
         if self.enable_translation_var.get():
@@ -800,7 +811,7 @@ class CaptionerUI:
 
     def connect_to_server(self):
         if self.is_connected_to_server:
-            return False
+            return
 
         threshold = self.threshold_var.get()
         min_chunk_size = self.min_chunk_size_var.get()
@@ -835,16 +846,18 @@ class CaptionerUI:
 
         self.audio_queue = queue.Queue()
         self.results_queue = queue.Queue()
-        self.whisper_client = WhisperClient(self.server_url_var.get().strip(), port, params, self.audio_queue, self.results_queue)
+        self.whisper_client = WhisperClient(
+            self.server_url_var.get().strip(),
+            port,
+            params,
+            self.audio_queue,
+            self.results_queue,
+            self.whisper_client_callback
+        )
         self.whisper_client.start()
-        self.is_connected_to_server = self.whisper_client.wait_until_connected(2.0)
-        return self.is_connected_to_server
 
     def disconnect_from_server(self):
-        if not self.is_connected_to_server:
-            return
-
-        if self.whisper_client:
+        if self.is_connected_to_server and self.whisper_client:
             print("Stopping whisper client...", flush=True)
             self.whisper_client.stop()
             self.whisper_client = None
@@ -852,51 +865,59 @@ class CaptionerUI:
             self.results_queue = None
             self.is_connected_to_server = False
 
-    def run_captioner(self) -> bool:
-        if self.is_connected_to_server:
-            if self.create_audio_listener():
-                if not self.zoom_url_var.get().strip():
-                    self.run_captions_overlay()
-
-                return True
-
-        return False
-
     def run_captions_overlay(self):
         self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
         self.captions_overlay.start()
 
-    def create_audio_listener(self) -> bool:
+    def create_audio_producer(self):
         min_chunk_size = self.min_chunk_size_var.get()
         use_second_dev = self.use_second_audio_dev_var.get()
         if use_second_dev:
             self.audio_temp_queue_1 = queue.Queue()
-            self.audio_listener = AudioListener(min_chunk_size, self.selected_device_1_info, self.audio_temp_queue_1)
-            self.audio_listener.start()
+            self.audio_producer = AudioStreamProducer(
+                min_chunk_size,
+                self.selected_device_1_info,
+                self.audio_temp_queue_1,
+                self.audio_producer_callback
+            )
+            self.audio_producer.start()
 
             self.audio_temp_queue_2 = queue.Queue()
-            self.audio_listener_2 = AudioListener(min_chunk_size, self.selected_device_2_info, self.audio_temp_queue_2)
-            self.audio_listener_2.start()
+            self.audio_producer_2 = AudioStreamProducer(
+                min_chunk_size,
+                self.selected_device_2_info,
+                self.audio_temp_queue_2,
+                self.audio_producer_callback
+            )
+            self.audio_producer_2.start()
 
-            self.audio_mixer = AudioMixer(self.audio_temp_queue_1, self.audio_temp_queue_2, self.audio_queue, int(self.audio_listener_2.min_chunk_size * self.audio_listener_2.WHISPER_SAMPLERATE))
+            self.audio_mixer = AudioMixer(
+                self.audio_temp_queue_1,
+                self.audio_temp_queue_2,
+                self.audio_queue,
+                int(self.audio_producer_2.min_chunk_size * WHISPER_SAMPLERATE)
+            )
             self.audio_mixer.start()
         else:
             # We use one device, puts the results directly to the audio_queue.
-            self.audio_listener = AudioListener(min_chunk_size, self.selected_device_1_info, self.audio_queue)
-            self.audio_listener.start()
-            
-        return True
+            self.audio_producer = AudioStreamProducer(
+                min_chunk_size,
+                self.selected_device_1_info,
+                self.audio_queue,
+                self.audio_producer_callback
+            )
+            self.audio_producer.start()
 
     def stop_captioner(self):
-        if self.audio_listener:
-            print("Stopping audio listener...", flush=True)
-            self.audio_listener.stop()
-            self.audio_listener = None
+        if self.audio_producer:
+            print("Stopping audio producer...", flush=True)
+            self.audio_producer.stop()
+            self.audio_producer = None
 
-        if self.audio_listener_2:
-            print("Stopping audio listener 2...", flush=True)
-            self.audio_listener_2.stop()
-            self.audio_listener_2 = None
+        if self.audio_producer_2:
+            print("Stopping audio producer 2...", flush=True)
+            self.audio_producer_2.stop()
+            self.audio_producer_2 = None
 
             print("Stopping audio mixer thread...", flush=True)
             self.audio_mixer.stop()
@@ -910,12 +931,55 @@ class CaptionerUI:
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
 
+    def whisper_client_callback(self, event_type: str, data: dict):
+        match event_type:
+            case "connected":
+                def on_connected():
+                    self.is_connected_to_server = True
+                    self.connect_btn.config(text="Disconnect", state="normal")
+                self.gui_queue.put(on_connected)
+            case "conn_lost" | "conn_shutdown":
+                self.gui_queue.put(self.on_disconnect_from_server)
+            case "ready":
+                def on_ready():
+                    self.record_btn.config(text="Record", state="normal")
+                self.gui_queue.put(on_ready)
+
+    def audio_producer_callback(self, event_type: str, data: dict):
+        match event_type:
+            case "stream_open":
+                def on_stream_open():
+                    if not self.zoom_url_var.get().strip():
+                        self.run_captions_overlay()
+                    self.record_btn.config(text="Stop")
+                    self.mute_btn.config(state="normal")
+                    if self.use_second_audio_dev_var.get():
+                        self.mute_btn_2.config(state="normal")
+                    self.is_recording = True
+
+                self.audio_producer_state_map[data["device_info"].index] = "open"
+                # If second device is used, wait for both streams to be open to update the UI.
+                if (not self.use_second_audio_dev_var.get()
+                    or list(self.audio_producer_state_map.values()) == ["open", "open"]
+                ):
+                    self.gui_queue.put(on_stream_open)
+
+            case "stream_closed" | "stream_error":
+                self.audio_producer_state_map[data["device_info"].index] = "closed"
+                self.gui_queue.put(self.on_stop_recording)
+
     def run_gui(self):
         self.root_wnd.mainloop()
 
 
-class AudioListener:
-    def __init__(self, min_chunk_size: float, input_device_info: InputDeviceInfo, result_queue: queue.Queue):
+class AudioStreamProducer:
+    def __init__(
+        self,
+        min_chunk_size: float,
+        input_device_info: InputDeviceInfo,
+        result_queue: queue.Queue,
+        notif_callback: Callable[[str, dict], None]=None
+    ):
         self.min_chunk_size = min_chunk_size
         self.input_device_info = input_device_info
 
@@ -930,6 +994,8 @@ class AudioListener:
 
         self.audio_queue = queue.Queue()
         self.result_queue = result_queue
+
+        self.notif_callback = notif_callback if notif_callback else lambda et, d: None
 
         self.stop_event = None
         self.audio_thread = None
@@ -1027,6 +1093,7 @@ class AudioListener:
                 extra_settings=settings
             ) as stream:
                 self.stream = stream
+                self.notif_callback("stream_open", {"device_info": self.input_device_info})
 
                 if self.input_device_info.resample_needed:
                     import soxr
@@ -1045,7 +1112,9 @@ class AudioListener:
                     self.resample_stream = None
         except Exception as e:
             logger.error(f"Audio stream error: {e}")
+            self.notif_callback("stream_error", {"message": str(e), "device_info": self.input_device_info})
         finally:
+            self.notif_callback("stream_closed", {"device_info": self.input_device_info})
             if self.input_device_info.api == "Windows WASAPI":
                 pythoncom.CoUninitialize()
 
@@ -1129,12 +1198,20 @@ class AudioMixer:
 
 
 class WhisperClient:
-    def __init__(self, server_url: str, port: int, params: map, audio_queue: queue.Queue, results_queue: queue.Queue = None):
+    def __init__(
+            self,
+            server_url: str,
+            port: int,
+            params: map,
+            audio_queue: queue.Queue,
+            results_queue: queue.Queue,
+            notif_callback: Callable[[str, dict], None]=None):
         self.server_url = server_url
         self.port = port
         self.params = params
         self.audio_queue = audio_queue
         self.results_queue = results_queue
+        self.notif_callback = notif_callback if notif_callback else lambda et, d: None
         self.connected_event = threading.Event()
         self.results_thread = None
         self.whisper_client_thread = None
@@ -1158,10 +1235,11 @@ class WhisperClient:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.server_url, self.port))
         except Exception as e:
-            print(f"Could not connect to the whisper server: {e}")
+            logger.error(f"Could not connect to the whisper server: {e}")
             return
 
         self.connected_event.set()
+        self.notif_callback("connected", {})
 
         # Step 1: send params JSON
         ccmn.send_json(sock, self.params)
@@ -1175,18 +1253,19 @@ class WhisperClient:
             while True:
                 chunk = self.audio_queue.get()
                 if chunk is None:
-                    # Tell the server we're done
+                    # Tell the server we're done, results thread should receive shutdown confirmation
                     ccmn.send_ndarray(sock, np.array([], dtype=np.float32))
                     sock.shutdown(socket.SHUT_WR)
-                    self.results_thread.join()  # wait for results thread to finish, should receive shutdown confirmation
-                    self.results_thread = None
                     break
 
                 ccmn.send_ndarray(sock, chunk)
 
         except (BrokenPipeError, ConnectionResetError) as e:
-            print(f"Server connection closed while streaming audio: {e}")
+            logger.error(f"Server connection closed while streaming audio: {e}")
+            self.notif_callback("conn_lost", {"message": str(e)})
         finally:
+            self.results_thread.join()  # wait for results thread to finish
+            self.results_thread = None
             sock.close()
 
     def listen_for_results(self, sock):
@@ -1195,7 +1274,8 @@ class WhisperClient:
             try:
                 msg = ccmn.recv_json(sock)
             except (ConnectionResetError, OSError) as e:
-                print(f"Connection lost: {e}.")
+                logger.error(f"Connection lost: {e}.")
+                self.notif_callback("conn_lost", {"message": str(e)})
                 break
 
             if msg is None:
@@ -1204,15 +1284,15 @@ class WhisperClient:
             if msg["type"] == "status":
                 if msg["value"] == "ready":
                     # Here we handle the notification that the server is ready to receive audio.
-                    pass
-                if msg["value"] == "shutdown":
+                    self.notif_callback("ready", {})
+                if msg["value"] == "conn_shutdown":
+                    self.notif_callback("conn_shutdown", {})
                     break
             elif msg["type"] == "translation":
-                #print(f"[{msg['lang']}]{' (complete)' if msg['complete'] else ''}: {msg['text']}")
                 if self.results_queue:
                     self.results_queue.put((msg['text'], msg['complete']))
             else:
-                print("Unknown message: ", msg)
+                logger.warning("Unknown message: ", msg)
 
     def wait_until_connected(self, timeout: float) -> bool:
         return self.connected_event.wait(timeout=timeout)
@@ -1226,7 +1306,11 @@ class CaptionsReceiver:
         self.is_running = False
         self.last_partial = False
 
-        self.overlay = captions_overlay.CaptionsOverlay(root_wnd)
+        self.overlay = captions_overlay.CaptionsOverlay(
+            root=root_wnd,
+            scroll_speed=400,
+            max_visible_lines=4
+        )
 
     def start(self):
         if not self.is_running:
@@ -1243,9 +1327,9 @@ class CaptionsReceiver:
                 continue
 
             if complete:
-                self.gui_queue.put(lambda t=text: self.overlay.overlay_wnd.after(0, lambda t=t: self.send_complete(text=t)))
+                self.gui_queue.put(lambda t=text: self.send_complete(text=t))
             else:
-                self.gui_queue.put(lambda t=text: self.overlay.overlay_wnd.after(0, lambda t=t: self.send_partial(text=t)))
+                self.gui_queue.put(lambda t=text: self.send_partial(text=t))
 
     def send_complete(self, text):
         if self.overlay:

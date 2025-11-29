@@ -18,3 +18,4 @@ transformers
 datasets
 sentencepiece
 sacremoses
+bitsandbytes

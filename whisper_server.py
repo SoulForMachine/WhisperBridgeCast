@@ -674,7 +674,7 @@ class WhisperServer:
                     # Confirm shutdown
                     ccmn.send_json(conn, {
                         "type": "status",
-                        "value": "shutdown"
+                        "value": "conn_shutdown"
                     })
 
                     conn.shutdown(socket.SHUT_WR)

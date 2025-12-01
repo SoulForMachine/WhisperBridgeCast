@@ -10,7 +10,6 @@ import queue
 import threading
 import requests
 import json
-import re
 
 
 def get_lang_code(lang: str) -> str:
@@ -119,13 +118,14 @@ class ASRProcessor:
         self.result_queue = result_queue
 
         self.asr_subproc = None
+        self.asr_ready_event = mp.Event()
         self.is_running = False
 
     def start(self):
         if not self.is_running:
             self.asr_subproc = mp.Process(
                 target=asr_subprocess_main,
-                args=(self.client_params, self.audio_queue, self.result_queue),
+                args=(self.client_params, self.audio_queue, self.result_queue, self.asr_ready_event),
                 daemon=False
             )
             self.asr_subproc.start()
@@ -137,6 +137,9 @@ class ASRProcessor:
             self.asr_subproc.join()
             self.asr_subproc = None
             self.is_running = False
+
+    def wait_until_ready(self, timeout: float = None) -> bool:
+        return self.asr_ready_event.wait(timeout=timeout)
 
 
 ########## Translator
@@ -309,6 +312,7 @@ class Translator:
 
         self.transl_thread = None
         self.is_running = False
+        self.transl_ready_event = None
 
         import spacy
         self.nlp = spacy.blank(get_lang_code(self.src_lang))
@@ -345,6 +349,7 @@ class Translator:
 
     def start(self):
         if not self.is_running:
+            self.transl_ready_event = threading.Event()
             self.transl_thread = threading.Thread(target=self.run)
             self.transl_thread.start()
             self.is_running = True
@@ -355,6 +360,7 @@ class Translator:
             self.transl_thread.join()
             self.transl_thread = None
             self.is_running = False
+            self.transl_ready_event = None
 
     def initialize_engine(self):
         self.engine = None
@@ -377,6 +383,8 @@ class Translator:
     def run(self):
         self.initialize_engine()
         last_partial_len = 0
+
+        self.transl_ready_event.set()
 
         while True:
             try:
@@ -411,6 +419,10 @@ class Translator:
                         ):
                             last_partial_len = len(text_to_transl)
                             self.translate_and_send(to_translate)
+
+    def wait_until_ready(self, timeout: float = None) -> bool:
+        return self.transl_ready_event.wait(timeout=timeout)
+
 
 ########## Zoom caption sender
 
@@ -473,6 +485,9 @@ class ZoomCaptionSender:
                 except requests.RequestException as e:
                     print(f"[ZoomCaptioner] Error sending to Zoom: {e}")
 
+    def wait_until_ready(self, timeout: float = None) -> bool:
+        return True  # Zoom caption sender is ready immediately
+
     @classmethod
     def _extract_meeting_id(cls, zoom_url):
         parsed = urlparse(zoom_url)
@@ -532,6 +547,8 @@ class CaptionSender:
                 "complete": complete,
             })
 
+    def wait_until_ready(self, timeout: float = None) -> bool:
+        return True  # Caption sender is ready immediately
 
 ########## WhisperPipeline
 
@@ -599,6 +616,10 @@ class WhisperPipeline:
         self.translator = None
         self.caption_sender = None
 
+    def wait_until_ready(self):
+        for cmp in [self.translator, self.caption_sender, self.asr_proc]:
+            cmp.wait_until_ready()
+
 
 class WhisperServer:
     def __init__(self, host="0.0.0.0", port=5000, write_wav=False, write_transcript=False):
@@ -654,8 +675,13 @@ class WhisperServer:
                 filename = datetime.now().strftime("recording-%Y%m%d_%H%M%S.wav")
                 wav_out = wav_writer.WavWriter(filename)
 
+            pipeline.wait_until_ready()
+
             # Step 2: confirm initialization
-            ccmn.send_json(conn, {"type": "status", "value": "ready"})
+            ccmn.send_json(conn, {
+                "type": "status",
+                "value": "ready"
+            })
 
             # Step 3: receive audio chunks
             while True:
@@ -686,8 +712,10 @@ class WhisperServer:
                 if self.write_wav:
                     wav_out.write_chunk(chunk)
 
-        except (ConnectionResetError, OSError) as e:
+        except OSError as e:
             print(f"Connection lost: {e}.")
+        except Exception as e:
+            print(f"Receiver exception: {e}.")
         finally:
             conn.close()
             print("Connection closed.")
@@ -696,12 +724,14 @@ class WhisperServer:
                 wav_out.close()
 
 
-def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: mp.Queue):
+def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: mp.Queue, asr_ready_event):
     """
     Runs in the subprocess: construct WhisperOnline here, then
     read audio chunks from audio_queue and put results to asr_queue.
     """
     whisper_online = WhisperOnline(client_params)
+
+    asr_ready_event.set()
 
     # loop until sentinel
     while True:

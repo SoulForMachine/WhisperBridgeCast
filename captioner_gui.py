@@ -1242,7 +1242,10 @@ class WhisperClient:
         self.notif_callback("connected", {})
 
         # Step 1: send params JSON
-        ccmn.send_json(sock, self.params)
+        try:
+            ccmn.send_json(sock, self.params)
+        except Exception as e:
+            logger.error(f"Error sending params to the server: {e}")
 
         # Step 2: start a thread to receive results
         self.results_thread = threading.Thread(target=self.listen_for_results, args=(sock,))
@@ -1260,9 +1263,9 @@ class WhisperClient:
 
                 ccmn.send_ndarray(sock, chunk)
 
-        except (BrokenPipeError, ConnectionResetError) as e:
-            logger.error(f"Server connection closed while streaming audio: {e}")
-            self.notif_callback("conn_lost", {"message": str(e)})
+        except OSError as e:
+            logger.error(f"Connection lost: {e}")
+            self.notif_callback("conn_lost", {"source": "sender", "message": str(e)})
         finally:
             self.results_thread.join()  # wait for results thread to finish
             self.results_thread = None
@@ -1273,10 +1276,13 @@ class WhisperClient:
         while True:
             try:
                 msg = ccmn.recv_json(sock)
-            except (ConnectionResetError, OSError) as e:
+            except OSError as e:
                 logger.error(f"Connection lost: {e}.")
-                self.notif_callback("conn_lost", {"message": str(e)})
+                self.notif_callback("conn_lost", {"source": "receiver", "message": str(e)})
                 break
+            except ValueError as e:  # JSON decode errors from corrupted/partial messages
+                logger.error(f"Receiver JSON error: {e}.")
+                continue
 
             if msg is None:
                 continue

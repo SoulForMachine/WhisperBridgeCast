@@ -7,10 +7,12 @@ import sounddevice as sd
 import tkinter as tk
 from tkinter import ttk, font
 import logging
-import captioner_common as ccmn
+import argparse
 from collections import defaultdict
 import captions_overlay
 from typing import Tuple, Callable
+
+import net_common as netc
 
 logger = logging.getLogger(__name__)
 
@@ -602,9 +604,10 @@ class CaptionerUI:
 
     def on_connect_to_server(self):
         if not self.is_connected_to_server:
-            self.connect_btn.config(state="disabled")
+            self.connect_btn.config(state="disabled", text="Connecting...")
             self.connect_btn.update_idletasks()
-            self.connect_to_server()
+            if not self.connect_to_server():
+                self.connect_btn.config(state="normal", text="Connect")
 
     def on_disconnect_from_server(self):
         if self.is_connected_to_server:
@@ -624,23 +627,14 @@ class CaptionerUI:
             self.show_modal_message("Error", "When the second audio device is enabled, different audio devices must be selected.", self.root_wnd)
             return
 
-        # Collect all values for debugging/demo purposes
-        print("Zoom URL:", self.zoom_url_var.get())
-        print("Audio device:", self.audio_device_combo_1.get())
-        if self.use_second_audio_dev_var.get():
-            print("Audio device 2:", self.audio_device_combo_2.get())
-        print("Whisper model:", self.model_var.get())
-        print("Whisper device:", self.whisper_device_var.get())
-        print("Whisper compute type:", self.whisper_compute_type_var.get())
-        print("Language:", self.lang_var.get())
-        print("Enable translation:", self.enable_translation_var.get())
-        print("Target language:", self.target_lang_var.get())
-        print("Threshold:", self.threshold_var.get())
-        print("Minimum chunk size:", self.min_chunk_size_var.get())
-        print("VAC enabled:", self.vac_var.get())
-        print("VAD enabled:", self.vad_var.get())
+        info_str = (
+            f"Running AudioStreamProducer(s) and CaptionsReceiver...\n"
+            f"\t  Audio device: {self.audio_device_combo_1.get()}\n"
+            f"\t  Audio device 2: {self.audio_device_combo_2.get() if self.use_second_audio_dev_var.get() else 'N/A'}\n"
+        )
+        logger.info(info_str)
 
-        print("Running Captioner...")
+        # Succesfull start of AudioStreamProducer will start up the CaptionsReceiver as well, if necessary.
         self.create_audio_producer()
 
     def on_stop_recording(self):
@@ -651,7 +645,7 @@ class CaptionerUI:
             self.mute_btn_2.config(state="disabled", text="🔊")
             self.is_recording = False
             self.update_selected_devices_label()
-            print("Recording stopped.")
+            logger.info("Recording stopped.")
 
     def on_enable_translation_toggle(self):
         if self.enable_translation_var.get():
@@ -809,23 +803,43 @@ class CaptionerUI:
         self.row_index_map[widget] += 1
         return i
 
-    def connect_to_server(self):
+    def connect_to_server(self) -> bool:
         if self.is_connected_to_server:
-            return
+            return False
 
         threshold = self.threshold_var.get()
         min_chunk_size = self.min_chunk_size_var.get()
 
+        server_url = self.server_url_var.get().strip()
+        if not server_url:
+            return False
+
         port, valid = str_to_int(self.server_port_var.get())
         if not valid or not (0 < port < 65536):
-            print("Error: Invalid port number. Setting to default: 5000")
-            port = 5000
+            logger.error(f"Invalid port number: {port}.")
+            return False
 
         transl_engine = self.transl_engine_var.get()
         if transl_engine in self.transl_engines_with_params:
             transl_params = { "api_key": self.transl_api_key_var.get().strip() }
         else:
             transl_params = {}
+
+        info_str = (
+            f"Connecting to server at {server_url}:{port} with parameters:\n"
+            f"\t  Zoom URL: {self.zoom_url_var.get() or "<none>"}\n"
+            f"\t  Whisper model: {self.model_var.get()}\n"
+            f"\t  Whisper device: {self.whisper_device_var.get()}\n"
+            f"\t  Whisper compute type: {self.whisper_compute_type_var.get()}\n"
+            f"\t  Language: {self.lang_var.get()}\n"
+            f"\t  Enable translation: {self.enable_translation_var.get()}\n"
+            f"\t  Target language: {self.target_lang_var.get()}\n"
+            f"\t  Threshold: {self.threshold_var.get()}\n"
+            f"\t  Minimum chunk size: {self.min_chunk_size_var.get()}\n"
+            f"\t  VAC enabled: {self.vac_var.get()}\n"
+            f"\t  VAD enabled: {self.vad_var.get()}\n"
+        )
+        logger.info(info_str)
 
         params = {
             "zoom_url": self.zoom_url_var.get().strip(),
@@ -839,7 +853,6 @@ class CaptionerUI:
             "translation_params": transl_params,
             "nsp_threshold": threshold,
             "min_chunk_size": min_chunk_size,
-            "log_level": "INFO",
             "vac": self.vac_var.get(),
             "vad": self.vad_var.get(),
         }
@@ -847,7 +860,7 @@ class CaptionerUI:
         self.audio_queue = queue.Queue()
         self.results_queue = queue.Queue()
         self.whisper_client = WhisperClient(
-            self.server_url_var.get().strip(),
+            server_url,
             port,
             params,
             self.audio_queue,
@@ -856,9 +869,11 @@ class CaptionerUI:
         )
         self.whisper_client.start()
 
+        return True
+
     def disconnect_from_server(self):
         if self.is_connected_to_server and self.whisper_client:
-            print("Stopping whisper client...", flush=True)
+            logger.info("Stopping whisper client...")
             self.whisper_client.stop()
             self.whisper_client = None
             self.audio_queue = None
@@ -910,21 +925,21 @@ class CaptionerUI:
 
     def stop_captioner(self):
         if self.audio_producer:
-            print("Stopping audio producer...", flush=True)
+            logger.info("Stopping audio producer...")
             self.audio_producer.stop()
             self.audio_producer = None
 
         if self.audio_producer_2:
-            print("Stopping audio producer 2...", flush=True)
+            logger.info("Stopping audio producer 2...")
             self.audio_producer_2.stop()
             self.audio_producer_2 = None
 
-            print("Stopping audio mixer thread...", flush=True)
+            logger.info("Stopping audio mixer thread...")
             self.audio_mixer.stop()
             self.audio_mixer = None
 
         if self.captions_overlay:
-            print("Stopping captions overlay...", flush=True)
+            logger.info("Stopping captions overlay...")
             self.captions_overlay.stop()
             self.captions_overlay = None
 
@@ -1065,14 +1080,14 @@ class AudioStreamProducer:
         return mono16k
 
     def run(self):
-        print_info = (
+        info_str = (
             f"Listening to [{self.input_device_info.index}] {self.input_device_info.name}\n"
-            f"  API: {self.input_device_info.api}\n"
-            f"  Channels: {self.device_channels}\n"
-            f"  Samplerate: {self.device_rate}\n"
-            f"  Blocksize: {self.blocksize} frames (block duration: ~{self.in_stream_block_dur} s)"
+            f"\t  API: {self.input_device_info.api}\n"
+            f"\t  Channels: {self.device_channels}\n"
+            f"\t  Samplerate: {self.device_rate}\n"
+            f"\t  Blocksize: {self.blocksize} frames (block duration: ~{self.in_stream_block_dur} s)"
         )
-        print(print_info, flush=True)
+        logger.info(info_str)
 
         settings = None
         if self.input_device_info.api == "Windows WASAPI":
@@ -1243,7 +1258,7 @@ class WhisperClient:
 
         # Step 1: send params JSON
         try:
-            ccmn.send_json(sock, self.params)
+            netc.send_json(sock, self.params)
         except Exception as e:
             logger.error(f"Error sending params to the server: {e}")
 
@@ -1257,11 +1272,14 @@ class WhisperClient:
                 chunk = self.audio_queue.get()
                 if chunk is None:
                     # Tell the server we're done, results thread should receive shutdown confirmation
-                    ccmn.send_ndarray(sock, np.array([], dtype=np.float32))
+                    netc.send_json(sock, {
+                        "type": "control",
+                        "command": "stop"
+                    })
                     sock.shutdown(socket.SHUT_WR)
                     break
 
-                ccmn.send_ndarray(sock, chunk)
+                netc.send_ndarray(sock, chunk)
 
         except OSError as e:
             logger.error(f"Connection lost: {e}")
@@ -1275,7 +1293,7 @@ class WhisperClient:
         # Receive status and translation messages from the server.
         while True:
             try:
-                msg = ccmn.recv_json(sock)
+                msg_type, msg = netc.recv_message(sock)
             except OSError as e:
                 logger.error(f"Connection lost: {e}.")
                 self.notif_callback("conn_lost", {"source": "receiver", "message": str(e)})
@@ -1284,7 +1302,7 @@ class WhisperClient:
                 logger.error(f"Receiver JSON error: {e}.")
                 continue
 
-            if msg is None:
+            if msg is None or msg_type != "json":
                 continue
 
             if msg["type"] == "status":
@@ -1298,7 +1316,7 @@ class WhisperClient:
                 if self.results_queue:
                     self.results_queue.put((msg['text'], msg['complete']))
             else:
-                logger.warning("Unknown message: ", msg)
+                logger.warning(f"Unknown message: {msg}")
 
     def wait_until_connected(self, timeout: float) -> bool:
         return self.connected_event.wait(timeout=timeout)
@@ -1364,5 +1382,14 @@ class CaptionsReceiver:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log-level", type=str, default="INFO", choices="CRITICAL,ERROR,WARNING,INFO,DEBUG,NOTSET".split(','), help="Logging level. Default: INFO")
+    args = parser.parse_args(sys.argv[1:])
+
+    logging.basicConfig(
+        level=args.log_level,
+        format='%(levelname)s\t%(message)s'
+    )
+
     app = CaptionerUI()
     app.run_gui()

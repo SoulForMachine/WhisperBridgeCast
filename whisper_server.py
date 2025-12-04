@@ -1,5 +1,5 @@
 import socket
-import captioner_common as ccmn
+import net_common as netc
 from urllib.parse import urlparse, parse_qs
 import multiprocessing as mp
 
@@ -11,6 +11,7 @@ import threading
 import requests
 import json
 
+logger = logging.getLogger(__name__)
 
 def get_lang_code(lang: str) -> str:
     lang_code_map = {
@@ -64,10 +65,8 @@ class WhisperServerParams:
 ######### WhisperOnline
 
 class WhisperOnline:
-    def __init__(self, client_params: dict):
+    def __init__(self, client_params: dict, logger: logging.Logger):
         import whisper_online as wo
-
-        logger = logging.getLogger(__name__)
 
         params = WhisperServerParams()
 
@@ -91,7 +90,7 @@ class WhisperOnline:
         else:
             params.task = "transcribe"
 
-        wo.set_logging(params, logger, other="")
+        wo.set_logging(logger.getEffectiveLevel())
 
         # Create whisper online processor object with params
         self.asr, self.asr_proc = wo.asr_factory(params)
@@ -377,7 +376,7 @@ class Translator:
                     case Translator.Engine.EUROLLM:
                         self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.target_lang)
             except Exception as e:
-                print(f"[Translator] Error initializing translation engine: {e}", flush=True)
+                logger.error(f"[Translator] Error initializing translation engine: {e}")
                 self.engine = None
 
     def run(self):
@@ -392,7 +391,7 @@ class Translator:
                 text = self.source_queue.get(timeout=timeout)
             except queue.Empty:
                 if self.current_text != "":
-                    print("[Translator] Timeout reached, flushing all current text.", flush=True)
+                    logger.info("[Translator] Timeout reached, flushing all current text.")
                     self.translate_and_send((self.current_text + "...", True))
                     self.current_text = ""
                     last_partial_len = 0
@@ -463,8 +462,6 @@ class ZoomCaptionSender:
             elif not text.strip():
                 continue
 
-            #print(f"Sending Zoom caption: {text}", flush=True)
-
             if self.zoom_url and complete:
                 # Build URL with lang + sequence params
                 url = f"{self.zoom_url}&lang={self.lang_code}&seq={self.sequence}"
@@ -481,9 +478,9 @@ class ZoomCaptionSender:
                         self.seq_map[self.meeting_id] = self.sequence
                         self._save_seq_map(self.seq_map)
                     else:
-                        print(f"[ZoomCaptioner] Error sending to Zoom: {result.status_code} {result.text}")
+                        logger.error(f"[ZoomCaptioner] Error sending to Zoom: [{result.status_code}] {result.text}")
                 except requests.RequestException as e:
-                    print(f"[ZoomCaptioner] Error sending to Zoom: {e}")
+                    logger.error(f"[ZoomCaptioner] Error sending to Zoom: {e}")
 
     def wait_until_ready(self, timeout: float = None) -> bool:
         return True  # Zoom caption sender is ready immediately
@@ -540,7 +537,7 @@ class CaptionSender:
             elif not text.strip():
                 continue
 
-            ccmn.send_json(self.conn, {
+            netc.send_json(self.conn, {
                 "type": "translation",
                 "lang": self.lang_code,
                 "text": text,
@@ -571,7 +568,7 @@ class WhisperPipeline:
             transl_engine = "none"
             capt_lang = language
 
-        print("Starting Translator thread...", flush=True)
+        logger.info("Starting Translator thread...")
         self.translator = Translator(
             transl_engine,
             transl_params,
@@ -583,7 +580,7 @@ class WhisperPipeline:
         )
         self.translator.start()
 
-        print("Starting Caption sender thread...", flush=True)
+        logger.info("Starting Caption sender thread...")
         capt_lang_code = get_lang_code(capt_lang)
         if zoom_url:
             zoom_url = zoom_url.strip()
@@ -593,7 +590,7 @@ class WhisperPipeline:
             self.caption_sender = CaptionSender(self.transl_queue, conn, capt_lang_code)
         self.caption_sender.start()
 
-        print("Starting ASR thread...", flush=True)
+        logger.info("Starting ASR thread...")
         self.asr_proc = ASRProcessor(client_params, self.audio_queue, self.asr_queue)
         self.asr_proc.start()
 
@@ -601,15 +598,15 @@ class WhisperPipeline:
         self.audio_queue.put(arr)
 
     def stop(self):
-        print("Stopping all threads...", flush=True)
+        logger.info("Stopping all threads...")
 
-        print("ASR thread exiting...", flush=True)
+        logger.info("ASR thread exiting...")
         self.asr_proc.stop()
 
-        print("Translator thread exiting...", flush=True)
+        logger.info("Translator thread exiting...")
         self.translator.stop()
 
-        print("Caption sender thread exiting...", flush=True)
+        logger.info("Caption sender thread exiting...")
         self.caption_sender.stop()
 
         self.asr_proc = None
@@ -644,28 +641,30 @@ class WhisperServer:
 
         try:
             while True:
-                print(f"Server listening on {self.host}:{self.port}")
+                logger.info(f"Server listening on {self.host}:{self.port}")
                 conn, addr = srv.accept()
-                print(f"Connected by {addr}")
+                logger.info(f"Connected by {addr}")
                 self.handle_client(conn)
         except KeyboardInterrupt:
-            print("Interrupted by user, stopping...")
+            logger.info("Interrupted by user, stopping...")
         except Exception as e:
-            print(f"Server error: {e}")
+            logger.error(f"Server error: {e}")
         finally:
-            print("Server shutting down.")
+            logger.info("Server shutting down.")
             srv.close()
             self.is_running = False
 
     def handle_client(self, conn: socket.socket):
         try:
             # Step 1: receive params
-            params = ccmn.recv_json(conn)
-            if params is None:
-                print("Failed to receive params.")
+            msg_type, params = netc.recv_message(conn)
+            if params is None or msg_type != "json":
+                logger.error("Failed to receive params from the client.")
                 conn.close()
                 return
-            print("Received params:", params)
+            logger.info(f"Received params: {params}")
+
+            params["log_level"] = logging.getLevelName(logger.getEffectiveLevel())    # Easier way to pass the log level
 
             pipeline = WhisperPipeline(params, conn)
 
@@ -678,58 +677,70 @@ class WhisperServer:
             pipeline.wait_until_ready()
 
             # Step 2: confirm initialization
-            ccmn.send_json(conn, {
+            netc.send_json(conn, {
                 "type": "status",
                 "value": "ready"
             })
 
-            # Step 3: receive audio chunks
+            # Step 3: receive audio chunks, or control messages
             while True:
-                chunk = ccmn.recv_ndarray(conn)
-                if chunk is None:
-                    print("Client disconnected unexpectedly.")
+                msg_type, msg = netc.recv_message(conn)
+                if msg is None:
+                    logger.error("Invalid message received.")
                     break
 
-                # Empty array signals that the client is diconnecting.
-                if len(chunk) == 0:
-                    print("Client gracefully disconnecting.")
+                if msg_type == "audio":
+                    if len(msg) == 0:
+                        continue
 
-                    # Stop the pipeline. This will flush any remaining text.
-                    pipeline.stop()
+                    # Send received chunk to the pipeline
+                    pipeline.process(msg)
 
-                    # Confirm shutdown
-                    ccmn.send_json(conn, {
-                        "type": "status",
-                        "value": "conn_shutdown"
-                    })
+                    if self.write_wav:
+                        wav_out.write_chunk(msg)
 
-                    conn.shutdown(socket.SHUT_WR)
-                    break
+                elif msg_type == "json":
+                    if msg.get("type") == "control":
+                        command = msg.get("command")
+                        if command == "stop":
+                            logger.info("Client gracefully disconnecting.")
 
-                # Send received chunk to the pipeline
-                pipeline.process(chunk)
+                            # Stop the pipeline. This will flush any remaining text.
+                            pipeline.stop()
 
-                if self.write_wav:
-                    wav_out.write_chunk(chunk)
+                            # Confirm shutdown
+                            netc.send_json(conn, {
+                                "type": "status",
+                                "value": "conn_shutdown"
+                            })
+
+                            conn.shutdown(socket.SHUT_WR)
+                            break
 
         except OSError as e:
-            print(f"Connection lost: {e}.")
+            logger.error(f"Connection lost: {e}.")
         except Exception as e:
-            print(f"Receiver exception: {e}.")
+            logger.error(f"Receiver exception: {e}.")
         finally:
             conn.close()
-            print("Connection closed.")
+            logger.info("Connection closed.")
 
             if self.write_wav:
                 wav_out.close()
 
 
+"""
+Runs in the subprocess: construct WhisperOnline here, then
+read audio chunks from audio_queue and put results to asr_queue.
+"""
 def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: mp.Queue, asr_ready_event):
-    """
-    Runs in the subprocess: construct WhisperOnline here, then
-    read audio chunks from audio_queue and put results to asr_queue.
-    """
-    whisper_online = WhisperOnline(client_params)
+    logger = logging.getLogger("whisper_online_asr_subproc")
+    logger.setLevel(client_params.get("log_level", "INFO"))
+    logging.basicConfig(
+        format='%(levelname)s\t%(message)s'
+    )
+
+    whisper_online = WhisperOnline(client_params, logger)
 
     asr_ready_event.set()
 
@@ -743,7 +754,7 @@ def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: m
         result = whisper_online.asr_proc.process_iter()
         if result and result[2]:
             asr_queue.put(result[2])
-            print(f"[ASR] {result[2]}", flush=True)
+            logger.info(f"[ASR] {result[2]}")
 
     # flush any remaining audio
     result = whisper_online.asr_proc.finish()
@@ -762,7 +773,13 @@ if __name__ == "__main__":
     parser.add_argument("--write-wav", action="store_true", help="Write received audio to a wav file.")
     parser.add_argument("--write-transcript", action="store_true", help="Write received transcript to a text file.")
     parser.add_argument("--warmup-file", type=str, default="data/samples_jfk.wav", help="Provide the audio file used to warm up the whisper model.")
+    parser.add_argument("--log-level", type=str, default="INFO", choices="CRITICAL,ERROR,WARNING,INFO,DEBUG,NOTSET".split(','), help="Logging level. Default: INFO")
     args = parser.parse_args(sys.argv[1:])
+
+    logging.basicConfig(
+        level=args.log_level,
+        format='%(levelname)s\t%(message)s'
+    )
 
     whisper_server = WhisperServer(args.host, args.port, args.write_wav, args.write_transcript)
     whisper_server.start()
@@ -773,5 +790,5 @@ if __name__ == "__main__":
             if whisper_server.is_running is False:
                 break
         except KeyboardInterrupt:
-            print("Stopping server...")
+            logger.info("Stopping server...")
             break

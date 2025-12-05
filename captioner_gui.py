@@ -1305,16 +1305,28 @@ class WhisperClient:
             if msg is None or msg_type != "json":
                 continue
 
-            if msg["type"] == "status":
-                if msg["value"] == "ready":
-                    # Here we handle the notification that the server is ready to receive audio.
-                    self.notif_callback("ready", {})
-                if msg["value"] == "conn_shutdown":
-                    self.notif_callback("conn_shutdown", {})
-                    break
-            elif msg["type"] == "translation":
+            msg_type = msg.get("type")
+            if msg_type == "status":
+                match msg.get("value"):
+                    case "ready":
+                        # Here we handle the notification that the server is ready to receive audio.
+                        self.notif_callback("ready", {})
+                    case "conn_shutdown":
+                        self.notif_callback("conn_shutdown", {})
+                        break
+                    case "translator_initializing":
+                        logger.info("Translation engine is initializing...")
+                    case "translator_initialized":
+                        logger.info("Translation engine initialized.")
+                    case "asr_initializing":
+                        logger.info("ASR engine is initializing...")
+                    case "asr_initialized":
+                        logger.info("ASR engine initialized.")
+            elif msg_type == "translation":
                 if self.results_queue:
-                    self.results_queue.put((msg['text'], msg['complete']))
+                    text, complete = msg.get("text"), msg.get("complete")
+                    if text and complete is not None:
+                        self.results_queue.put((text, complete))
             else:
                 logger.warning(f"Unknown message: {msg}")
 

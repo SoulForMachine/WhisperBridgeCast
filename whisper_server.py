@@ -636,35 +636,56 @@ class WhisperServer:
         self.conn = None
         self.server_thread = None
         self.is_running = False
+        self.is_stopping = False
         self.host = host
         self.port = port
+        self.listen_socket = None
+        self.client_socket = None
         self.write_wav = write_wav
         self.write_transcript = write_transcript
 
     def start(self):
         if not self.is_running:
-            self.server_thread = threading.Thread(target=self.run, daemon=True)
+            self.server_thread = threading.Thread(target=self.run)
             self.server_thread.start()
-            self.is_running = True
+
+    def stop(self):
+        if self.is_running:
+            self.is_stopping = True
+
+            if self.listen_socket:
+                self._close_socket(self.listen_socket)
+
+            if self.client_socket:
+                self._close_socket(self.client_socket)
+
+            if self.server_thread:
+                self.server_thread.join()
+                self.server_thread = None
+
+            self.listen_socket = None
+            self.client_socket = None
+            self.is_stopping = False
 
     def run(self):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.bind((self.host, self.port))
-        srv.listen(1)
+        self.is_running = True
+        self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listen_socket.bind((self.host, self.port))
+        self.listen_socket.listen(1)
 
         try:
-            while True:
+            while not self.is_stopping:
                 logger.info(f"Server listening on {self.host}:{self.port}")
-                conn, addr = srv.accept()
+                self.client_socket, addr = self.listen_socket.accept()
                 logger.info(f"Connected by {addr}")
-                self.handle_client(conn)
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user, stopping...")
+                self.handle_client(self.client_socket)
+                self.client_socket = None
         except Exception as e:
-            logger.error(f"Server error: {e}")
+            if not self.is_stopping:
+                logger.error(f"Server error: {e}")
         finally:
             logger.info("Server shutting down.")
-            srv.close()
+            self._close_socket(self.listen_socket)
             self.is_running = False
 
     def handle_client(self, conn: socket.socket):
@@ -685,7 +706,7 @@ class WhisperServer:
             msg_type, params = netc.recv_message(conn)
             if params is None or msg_type != "json":
                 logger.error("Failed to receive params from the client.")
-                conn.close()
+                self._close_socket(conn)
                 return
             logger.info(f"Received params: {params}")
 
@@ -734,7 +755,8 @@ class WhisperServer:
                             break
 
         except OSError as e:
-            logger.error(f"Connection lost: {e}.")
+            if not self.is_stopping:
+                logger.error(f"Connection lost (receiver): {e}.")
         except Exception as e:
             logger.error(f"Receiver exception: {e}.")
         finally:
@@ -754,7 +776,7 @@ class WhisperServer:
             sender_thread.join()
 
             # Close the connection
-            conn.close()
+            self._close_socket(conn)
             logger.info("Connection closed.")
 
             if wav_out:
@@ -768,10 +790,16 @@ class WhisperServer:
                     break
                 netc.send_json(conn, msg)
         except OSError as e:
-            logger.error(f"Sender connection lost: {e}.")
+            if not self.is_stopping:
+                logger.error(f"Connection lost (sender): {e}.")
         except Exception as e:
             logger.error(f"Sender exception: {e}.")
 
+    def _close_socket(self, sock: socket.socket):
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 """
 Runs in the subprocess: construct WhisperOnline here, then
@@ -797,16 +825,19 @@ def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: m
         "value": "asr_initialized"
     })
 
-    while True:
-        chunk = audio_queue.get()
-        if chunk is None:
-            break
+    try:
+        while True:
+            chunk = audio_queue.get()
+            if chunk is None:
+                break
 
-        whisper_online.asr_proc.insert_audio_chunk(chunk)
-        result = whisper_online.asr_proc.process_iter()
-        if result and result[2]:
-            asr_queue.put(result[2])
-            logger.info(f"[ASR] {result[2]}")
+            whisper_online.asr_proc.insert_audio_chunk(chunk)
+            result = whisper_online.asr_proc.process_iter()
+            if result and result[2]:
+                asr_queue.put(result[2])
+                logger.info(f"[ASR] {result[2]}")
+    except (KeyboardInterrupt, Exception):
+        pass
 
     # Flush any remaining audio
     result = whisper_online.asr_proc.finish()
@@ -836,11 +867,12 @@ if __name__ == "__main__":
     whisper_server = WhisperServer(args.host, args.port, args.write_wav, args.write_transcript)
     whisper_server.start()
 
-    while True:
-        try:
-            threading.Event().wait(1)
-            if whisper_server.is_running is False:
-                break
-        except KeyboardInterrupt:
-            logger.info("Stopping server...")
-            break
+    try:
+        import time
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt, stopping server...")
+    finally:
+        whisper_server.stop()
+        os._exit(0)

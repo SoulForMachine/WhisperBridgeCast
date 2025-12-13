@@ -595,10 +595,8 @@ class CaptionerUI:
                 self.mute_btn_2.config(text="🔇")
 
     def quit(self):
-        if self.is_recording:
-            self.stop_captioner()
-        if self.is_connected_to_server:
-            self.disconnect_from_server()
+        self.stop_captioner()
+        self.stop_whisper_client()
         self.root_wnd.quit()
         self.root_wnd.destroy()
 
@@ -611,13 +609,12 @@ class CaptionerUI:
 
     def on_disconnect_from_server(self):
         if self.is_connected_to_server:
-            if self.is_recording:
-                self.on_stop_recording()
-                self.is_recording = False
+            self.on_stop_recording()
             self.connect_btn.config(state="disabled")
-            self.disconnect_from_server()
+            self.stop_whisper_client()
             self.connect_btn.config(state="normal", text="Connect")
             self.record_btn.config(state="disabled", text="Record")
+            self.is_connected_to_server = False
 
     def on_start_recording(self):
         if self.is_recording or not self.is_connected_to_server:
@@ -871,14 +868,13 @@ class CaptionerUI:
 
         return True
 
-    def disconnect_from_server(self):
-        if self.is_connected_to_server and self.whisper_client:
+    def stop_whisper_client(self):
+        if self.whisper_client:
             logger.info("Stopping whisper client...")
             self.whisper_client.stop()
             self.whisper_client = None
             self.audio_queue = None
             self.results_queue = None
-            self.is_connected_to_server = False
 
     def run_captions_overlay(self):
         self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
@@ -953,8 +949,15 @@ class CaptionerUI:
                     self.is_connected_to_server = True
                     self.connect_btn.config(text="Disconnect", state="normal")
                 self.gui_queue.put(on_connected)
-            case "conn_lost" | "conn_shutdown":
+            case "conn_lost" | "conn_shutdown" | "params_send_error":
                 self.gui_queue.put(self.on_disconnect_from_server)
+            case "conn_error":
+                def on_conn_error():
+                    self.stop_whisper_client()
+                    self.connect_btn.config(text="Connect", state="normal")
+                    self.record_btn.config(text="Record", state="disabled")
+                    self.is_connected_to_server = False
+                self.gui_queue.put(on_conn_error)
             case "ready":
                 def on_ready():
                     self.record_btn.config(text="Record", state="normal")
@@ -1251,6 +1254,7 @@ class WhisperClient:
             sock.connect((self.server_url, self.port))
         except Exception as e:
             logger.error(f"Could not connect to the whisper server: {e}")
+            self.notif_callback("conn_error", {"message": str(e)})
             return
 
         self.connected_event.set()
@@ -1261,6 +1265,8 @@ class WhisperClient:
             netc.send_json(sock, self.params)
         except Exception as e:
             logger.error(f"Error sending params to the server: {e}")
+            self.notif_callback("params_send_error", {"message": str(e)})
+            return
 
         # Step 2: start a thread to receive results
         self.results_thread = threading.Thread(target=self.listen_for_results, args=(sock,))
@@ -1284,6 +1290,9 @@ class WhisperClient:
         except OSError as e:
             logger.error(f"Connection lost: {e}")
             self.notif_callback("conn_lost", {"source": "sender", "message": str(e)})
+        except Exception as e:
+            logger.error(f"Sender exception: {e}.")
+            self.notif_callback("conn_lost", {"source": "sender", "message": str(e)})
         finally:
             self.results_thread.join()  # wait for results thread to finish
             self.results_thread = None
@@ -1301,6 +1310,10 @@ class WhisperClient:
             except ValueError as e:  # JSON decode errors from corrupted/partial messages
                 logger.error(f"Receiver JSON error: {e}.")
                 continue
+            except Exception as e:
+                logger.error(f"Receiver exception: {e}.")
+                self.notif_callback("conn_lost", {"source": "receiver", "message": str(e)})
+                break
 
             if msg is None or msg_type != "json":
                 continue

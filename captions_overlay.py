@@ -33,8 +33,8 @@ class CaptionsOverlay:
         self.overlay_wnd.overrideredirect(True)
         self.overlay_wnd.protocol("WM_DELETE_WINDOW", lambda: None)  # Disable close button
 
-        self.overlay_wnd.bind("<Button-1>", self.start_move)
-        self.overlay_wnd.bind("<B1-Motion>", self.do_move)
+        self.overlay_wnd.bind("<Button-1>", self._start_move)
+        self.overlay_wnd.bind("<B1-Motion>", self._do_move)
         self.start_x = 0
         self.start_y = 0
 
@@ -57,20 +57,20 @@ class CaptionsOverlay:
         self.scrolling = False
 
         # Set fixed window size
-        self.set_window_geometry()
+        self._set_window_geometry()
 
     # --- Window movement ---
-    def start_move(self, event):
+    def _start_move(self, event):
         self.start_x = event.x
         self.start_y = event.y
 
-    def do_move(self, event):
+    def _do_move(self, event):
         x = self.overlay_wnd.winfo_x() + (event.x - self.start_x)
         y = self.overlay_wnd.winfo_y() + (event.y - self.start_y)
         self.overlay_wnd.geometry(f"+{x}+{y}")
 
     # --- Window sizing and position ---
-    def set_window_geometry(self):
+    def _set_window_geometry(self):
         screen_width = self.overlay_wnd.winfo_screenwidth()
         screen_height = self.overlay_wnd.winfo_screenheight()
         width = int(screen_width * self.width_ratio)
@@ -108,7 +108,7 @@ class CaptionsOverlay:
 #            self.anchor_wnd_to_pt(bc_pt_x, bc_pt_y)
 
     # --- Text wrapping ---
-    def wrap_text(self, text):
+    def _wrap_text(self, text):
         words = text.split()
         lines = []
         current_line = ""
@@ -143,7 +143,7 @@ class CaptionsOverlay:
 
         while self.pending_text:
             text, op = self.pending_text.pop(0)
-            wrapped_lines = self.wrap_text(text)
+            wrapped_lines = self._wrap_text(text)
             new_item_height = len(wrapped_lines) * self.line_height
 
             if op == "update" and self.visual_lines:
@@ -174,13 +174,14 @@ class CaptionsOverlay:
         y = self.height - self.padding - len(wrapped_lines) * self.line_height
         line_ids = []
         for line in wrapped_lines:
-            cid = self.canvas.create_text(self.padding, y, anchor="nw",
-                                        text=line, fill="white", font=self.font)
+            cid = self.canvas.create_text(self.padding, y, anchor="nw", text=line, fill="white", font=self.font)
             line_ids.append(cid)
             y += self.line_height
-        self.visual_lines.append({"lines": line_ids,
-                                "y": self.height - self.padding - len(wrapped_lines) * self.line_height,
-                                "height": len(wrapped_lines) * self.line_height})
+        self.visual_lines.append({
+            "lines": line_ids,
+            "y": self.height - self.padding - len(wrapped_lines) * self.line_height,
+            "height": len(wrapped_lines) * self.line_height
+        })
         self._cleanup_lines()
 
     def _scroll_old_lines(self, remaining_scroll, new_item_height, wrapped_lines):
@@ -220,13 +221,21 @@ class CaptionsOverlay:
 
     def _cleanup_lines(self):
         """Delete items that have scrolled out of the visible canvas."""
+        """For visible items, hide wrapped lines that are above the padding."""
         new_visual_lines = []
         for vl in self.visual_lines:
-            # bottom of the item
+            # The visual line (can be multiple wrapped lines) should be kept if its bottom is below the padding
             if vl["y"] + vl["height"] > self.padding:
                 new_visual_lines.append(vl)
+                y = vl["y"]
+                for cid in vl["lines"]:
+                    if y + self.line_height > self.padding:
+                        self.canvas.itemconfig(cid, state="normal")
+                    else:
+                        self.canvas.itemconfig(cid, state="hidden")
+                    y += self.line_height
             else:
-                # remove all canvas IDs for this item
+                # remove all canvas IDs for this visual line
                 for cid in vl["lines"]:
                     self.canvas.delete(cid)
         self.visual_lines = new_visual_lines

@@ -11,6 +11,7 @@ import argparse
 from collections import defaultdict
 import captions_overlay
 from typing import Tuple, Callable
+import time
 
 import net_common as netc
 
@@ -248,7 +249,7 @@ class CaptionerUI:
         self.selected_device_2_info = None
         self.audio_producer = None
         self.audio_producer_2 = None
-        self.audio_mixer = None
+        self.audio_switcher = None
         self.audio_producer_state_map = {}  # device_index -> "open" | "closed"
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
@@ -902,13 +903,13 @@ class CaptionerUI:
             )
             self.audio_producer_2.start()
 
-            self.audio_mixer = AudioMixer(
+            self.audio_switcher = AudioSwitcher(
                 self.audio_temp_queue_1,
                 self.audio_temp_queue_2,
                 self.audio_queue,
                 int(self.audio_producer_2.min_chunk_size * WHISPER_SAMPLERATE)
             )
-            self.audio_mixer.start()
+            self.audio_switcher.start()
         else:
             # We use one device, puts the results directly to the audio_queue.
             self.audio_producer = AudioStreamProducer(
@@ -930,9 +931,10 @@ class CaptionerUI:
             self.audio_producer_2.stop()
             self.audio_producer_2 = None
 
-            logger.info("Stopping audio mixer thread...")
-            self.audio_mixer.stop()
-            self.audio_mixer = None
+        if self.audio_switcher:
+            logger.info("Stopping audio switcher thread...")
+            self.audio_switcher.stop()
+            self.audio_switcher = None
 
         if self.captions_overlay:
             logger.info("Stopping captions overlay...")
@@ -1137,82 +1139,183 @@ class AudioStreamProducer:
                 pythoncom.CoUninitialize()
 
 
-class AudioMixer:
+class AudioSwitcher:
     """
-    Mixes two audio sources (mic + VB-CABLE) into a single
-    16 kHz mono stream, outputting uniform chunks.
+    Professional-style automatic audio switcher.
+
+    Features:
+    - Adaptive per-source noise floor
+    - SNR-based voice detection
+    - Attack / release timing
+    - Hysteresis
+    - Stable switching (no chatter)
     """
-    def __init__(self, mic_queue: queue.Queue, cable_queue: queue.Queue, result_queue: queue.Queue, min_chunk_size: int):
-        self.mic_queue = mic_queue
-        self.cable_queue = cable_queue
-        self.result_queue = result_queue
+
+    def __init__(
+        self,
+        audio1_queue: queue.Queue,
+        audio2_queue: queue.Queue,
+        output_queue: queue.Queue,
+        snr_threshold: float = 2.0,
+        attack_time: float = 0.05,
+        release_time: float = 0.3,
+        switch_cooldown: float = 0.15,
+        noise_alpha: float = 0.01,
+        snr_smoothing: float = 0.5,
+    ):
+        self.audio1_queue = audio1_queue
+        self.audio2_queue = audio2_queue
+        self.output_queue = output_queue
+
+        self.snr_threshold = snr_threshold
+        self.attack_time = attack_time
+        self.release_time = release_time
+        self.switch_cooldown = switch_cooldown
+        self.noise_alpha = noise_alpha
+        self.snr_smoothing = snr_smoothing
+
         self.stop_event = threading.Event()
+        self.thread = None
 
-        # Minimum chunk size in samples (e.g., 8000 = 0.5s @ 16kHz)
-        self.min_chunk_size = min_chunk_size
+        self.current_source = 1
+        self.last_switch_time = 0.0
 
-        # Buffers to hold leftover samples until enough are collected
-        self.buffer = np.zeros(0, dtype=np.float32)
+        # Noise floors
+        self.noise1 = 1e-6
+        self.noise2 = 1e-6
 
-        self.mixing_thread = None
-        self.is_running = False
+        # Smoothed SNR
+        self.snr1_smooth = 0.0
+        self.snr2_smooth = 0.0
+
+        # Voice state tracking
+        self.voice1 = False
+        self.voice2 = False
+        self.voice1_time = 0.0
+        self.voice2_time = 0.0
+
+    @staticmethod
+    def rms(chunk: np.ndarray) -> float:
+        if chunk.ndim > 1:
+            chunk = chunk.mean(axis=1)
+        return float(np.sqrt(np.mean(chunk ** 2) + 1e-12))
+
+    def update_noise_floor(self, rms, current_floor):
+        # Update only when near noise level
+        if rms < current_floor * 2:
+            return (1 - self.noise_alpha) * current_floor + self.noise_alpha * rms
+        return current_floor
+
+    def update_voice_state(self, snr_smooth, is_voice, voice_time, now):
+        if snr_smooth > self.snr_threshold:
+            if not is_voice:
+                if now - voice_time >= self.attack_time:
+                    return True, now
+                else:
+                    return False, voice_time
+            return True, voice_time
+        else:
+            if is_voice:
+                if now - voice_time >= self.release_time:
+                    return False, now
+                else:
+                    return True, voice_time
+            return False, voice_time
 
     def start(self):
-        if not self.is_running:
-            self.mixing_thread = threading.Thread(target=self.run)
-            self.mixing_thread.start()
-            self.is_running = True
+        if not self.thread or not self.thread.is_alive():
+            self.thread = threading.Thread(target=self.run)
+            self.thread.start()
 
     def stop(self):
-        if self.is_running:
-            self.stop_event.set()
-            self.mic_queue.put(None)
-            self.cable_queue.put(None)
-            self.mixing_thread.join()
-            self.mixing_thread = None
-            self.is_running = False
-
-    def receive_chunk_from_queue(self, q: queue.Queue):
-        """Pull one chunk from a queue, or return None if empty."""
-        try:
-            return q.get(timeout=0.05)
-        except queue.Empty:
-            return None
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join()
+            self.thread = None
 
     def run(self):
         while not self.stop_event.is_set():
-            mic_chunk = self.receive_chunk_from_queue(self.mic_queue)
-            cable_chunk = self.receive_chunk_from_queue(self.cable_queue)
+            try:
+                time.sleep(0.02)
 
-            # If nothing arrived, loop again
-            if mic_chunk is None and cable_chunk is None:
-                continue
+                try:
+                    chunk1 = self.audio1_queue.get_nowait()
+                except queue.Empty:
+                    chunk1 = None
 
-            # Replace missing chunks with zeros
-            if mic_chunk is None and cable_chunk is not None:
-                mic_chunk = np.zeros_like(cable_chunk)
-            elif cable_chunk is None and mic_chunk is not None:
-                cable_chunk = np.zeros_like(mic_chunk)
+                try:
+                    chunk2 = self.audio2_queue.get_nowait()
+                except queue.Empty:
+                    chunk2 = None
 
-            # If still both None, skip
-            if mic_chunk is None or cable_chunk is None:
-                continue
+                if chunk1 is None and chunk2 is None:
+                    continue
 
-            # Align lengths
-            min_len = min(len(mic_chunk), len(cable_chunk))
-            mixed = mic_chunk[:min_len] + cable_chunk[:min_len]
+                now = time.time()
+                rms1 = rms2 = 0.0
 
-            # Prevent clipping
-            mixed = np.clip(mixed, -1.0, 1.0).astype(np.float32)
+                if chunk1 is not None:
+                    rms1 = self.rms(chunk1)
+                    self.noise1 = self.update_noise_floor(rms1, self.noise1)
+                    snr1 = rms1 / (self.noise1 + 1e-9)
 
-            # Append to buffer
-            self.buffer = np.concatenate([self.buffer, mixed])
+                    self.snr1_smooth = (
+                        (1 - self.snr_smoothing) * self.snr1_smooth
+                        + self.snr_smoothing * snr1
+                    )
 
-            # While enough samples, push out uniform chunks
-            while len(self.buffer) >= self.min_chunk_size:
-                out_chunk = self.buffer[:self.min_chunk_size]
-                self.buffer = self.buffer[self.min_chunk_size:]
-                self.result_queue.put(out_chunk)
+                    self.voice1, self.voice1_time = self.update_voice_state(
+                        self.snr1_smooth, self.voice1, self.voice1_time, now
+                    )
+
+
+                if chunk2 is not None:
+                    rms2 = self.rms(chunk2)
+                    self.noise2 = self.update_noise_floor(rms2, self.noise2)
+                    snr2 = rms2 / (self.noise2 + 1e-9)
+
+                    self.snr2_smooth = (
+                        (1 - self.snr_smoothing) * self.snr2_smooth
+                        + self.snr_smoothing * snr2
+                    )
+
+                    self.voice2, self.voice2_time = self.update_voice_state(
+                        self.snr2_smooth, self.voice2, self.voice2_time, now
+                    )
+
+                # Determine dominant source
+                dominant = None
+                if self.voice1 and not self.voice2:
+                    dominant = 1
+                elif self.voice2 and not self.voice1:
+                    dominant = 2
+                elif self.voice1 and self.voice2:
+                    dominant = self.current_source
+
+                # Switch if needed
+                if (
+                    dominant
+                    and dominant != self.current_source
+                    and now - self.last_switch_time >= self.switch_cooldown
+                ):
+                    self.current_source = dominant
+                    self.last_switch_time = now
+                    logger.debug(f"Switched to source {self.current_source}")
+
+                selected = chunk1 if self.current_source == 1 else chunk2
+                if selected is not None:
+                    self.output_queue.put(selected)
+
+                logger.debug(
+                    f"RMS1={rms1:.5f} SNR1={self.snr1_smooth:.2f} "
+                    f"RMS2={rms2:.5f} SNR2={self.snr2_smooth:.2f} "
+                    f"Voice1={self.voice1} Voice2={self.voice2} "
+                    f"Current={self.current_source}"
+                )
+
+            except Exception as e:
+                logger.error(f"AudioSwitcher error: {e}")
+                break
 
 
 class WhisperClient:

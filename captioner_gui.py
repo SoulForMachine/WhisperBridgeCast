@@ -638,11 +638,6 @@ class CaptionerUI:
     def on_stop_recording(self):
         if self.is_recording:
             self.stop_captioner()
-            self.record_btn.config(text="Record")
-            self.mute_btn.config(state="disabled", text="🔊")
-            self.mute_btn_2.config(state="disabled", text="🔊")
-            self.is_recording = False
-            self.update_selected_devices_label()
             logger.info("Recording stopped.")
 
     def on_enable_translation_toggle(self):
@@ -884,7 +879,12 @@ class CaptionerUI:
     def create_audio_producer(self):
         min_chunk_size = self.min_chunk_size_var.get()
         use_second_dev = self.use_second_audio_dev_var.get()
+        self.audio_producer_state_map.clear()
+
         if use_second_dev:
+            self.audio_producer_state_map[self.selected_device_1_info.index] = "closed"
+            self.audio_producer_state_map[self.selected_device_2_info.index] = "closed"
+
             self.audio_temp_queue_1 = queue.Queue()
             self.audio_producer = AudioStreamProducer(
                 min_chunk_size,
@@ -911,6 +911,8 @@ class CaptionerUI:
             )
             self.audio_switcher.start()
         else:
+            self.audio_producer_state_map[self.selected_device_1_info.index] = "closed"
+
             # We use one device, puts the results directly to the audio_queue.
             self.audio_producer = AudioStreamProducer(
                 min_chunk_size,
@@ -979,14 +981,20 @@ class CaptionerUI:
 
                 self.audio_producer_state_map[data["device_info"].index] = "open"
                 # If second device is used, wait for both streams to be open to update the UI.
-                if (not self.use_second_audio_dev_var.get()
-                    or list(self.audio_producer_state_map.values()) == ["open", "open"]
-                ):
+                if all(state == "open" for state in self.audio_producer_state_map.values()):
                     self.gui_queue.put(on_stream_open)
 
             case "stream_closed" | "stream_error":
+                def on_stream_closed():
+                    self.record_btn.config(text="Record")
+                    self.mute_btn.config(state="disabled", text="🔊")
+                    self.mute_btn_2.config(state="disabled", text="🔊")
+                    self.is_recording = False
+
                 self.audio_producer_state_map[data["device_info"].index] = "closed"
-                self.gui_queue.put(self.on_stop_recording)
+                # If second device is used, wait for both streams to be closed to update the UI.
+                if all(state == "closed" for state in self.audio_producer_state_map.values()):
+                    self.gui_queue.put(on_stream_closed)
 
     def run_gui(self):
         self.root_wnd.mainloop()

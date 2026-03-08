@@ -13,6 +13,25 @@ import json
 
 logger = logging.getLogger(__name__)
 
+class MPCountingQueue:
+    def __init__(self):
+        self.q = mp.Queue()
+        self.counter = mp.Value('i', 0)
+
+    def put(self, item):
+        self.q.put(item)
+        with self.counter.get_lock():
+            self.counter.value += 1
+
+    def get(self, block=True, timeout=None):
+        item = self.q.get(block=block, timeout=timeout)
+        with self.counter.get_lock():
+            self.counter.value -= 1
+        return item
+
+    def qsize(self):
+        return self.counter.value
+
 def get_lang_code(lang: str) -> str:
     lang_code_map = {
         "English": "en",
@@ -111,7 +130,7 @@ class WhisperOnline:
 ######### ASR processor
 
 class ASRProcessor:
-    def __init__(self, client_params: dict, audio_queue: mp.Queue, result_queue: mp.Queue, sender_queue: mp.Queue):
+    def __init__(self, client_params: dict, audio_queue: MPCountingQueue, result_queue: MPCountingQueue, sender_queue: mp.Queue):
         self.client_params = client_params
         self.audio_queue = audio_queue
         self.result_queue = result_queue
@@ -320,7 +339,22 @@ class Translator:
         self.nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6  # seconds
-    SEND_PARTIAL_LEN = 50  # Send partial text in increments of at least this many characters.
+    SEND_INCREMENT_WORDS = 2  # Send partial text in increments of at least this many words.
+
+    def _buffered_word_count(self):
+        # Approximate word count by counting spaces. This is not exact but should be sufficient for statistics.
+        return self.current_text.count(" ") + 1 if self.current_text else 0
+
+    def _word_count(self, text: str):
+        return text.count(" ") + 1 if text else 0
+
+    def _send_buffered_text_stats(self):
+        self.sender_queue.put({
+            "type": "statistics",
+            "values": {
+                "transl_buffer_word_count": self._buffered_word_count(),
+            }
+        })
 
     def add_text(self, text: str):
         # Append new text to the current buffer.
@@ -343,8 +377,18 @@ class Translator:
 
     def translate_and_send(self, text: tuple[str, bool]):
         if self.engine is not None:
+            import time
+            proc_start = time.perf_counter()
             transl_text = self.engine.translate_text(text[0])
+            proc_end = time.perf_counter()
             self.result_queue.put((transl_text, text[1]))
+
+            self.sender_queue.put({
+                "type": "statistics",
+                "values": {
+                    "last_transl_proc_time": proc_end - proc_start
+                }
+            })
         else:
             self.result_queue.put(text)
 
@@ -394,26 +438,41 @@ class Translator:
             "value": "translator_initialized"
         })
 
-        last_partial_len = 0
+        last_partial_words = 0
         self.transl_ready_event.set()
 
         while True:
-            try:
-                timeout = self.FLUSH_TIMEOUT if self.current_text != "" else None
-                text = self.source_queue.get(timeout=timeout)
-            except queue.Empty:
-                if self.current_text != "":
-                    logger.info("[Translator] Timeout reached, flushing all current text.")
-                    self.translate_and_send((self.current_text + "...", True))
-                    self.current_text = ""
-                    last_partial_len = 0
-                continue
+            # If the queue is empty, wait for new text with a timeout if there is buffered text, otherwise wait indefinitely.
+            if self.source_queue.qsize() == 0:
+                try:
+                    timeout = self.FLUSH_TIMEOUT if self.current_text != "" else None
+                    text = self.source_queue.get(timeout=timeout)
+                except queue.Empty:
+                    if self.current_text != "":
+                        logger.info("[Translator] Timeout reached, flushing all current text.")
+                        self.translate_and_send((self.current_text + "...", True))
+                        self.current_text = ""
+                        last_partial_words = 0
+                        self._send_buffered_text_stats()
+                    continue
 
-            if text is None:
-                break
+                if text is None:
+                    break
+                self.add_text(text)
 
-            self.add_text(text)
+            # Get all available text from the queue.
+            while self.source_queue.qsize() > 0:
+                try:
+                    text = self.source_queue.get(block=False)
+                except queue.Empty:
+                    break
+
+                if text is None:
+                    return
+                self.add_text(text)
+
             sentences = self.get_sentences()
+            self._send_buffered_text_stats()
 
             for to_translate in sentences:
                 text_to_transl = to_translate[0]
@@ -422,14 +481,15 @@ class Translator:
                 if text_to_transl != "":
                     if complete_sentence:
                         self.translate_and_send(to_translate)
-                        last_partial_len = 0
+                        last_partial_words = 0
                     elif not self.only_complete_sent:
+                        partial_words = self._word_count(text_to_transl)
                         if (
                             self.engine is None
-                            or len(text_to_transl) - last_partial_len >= self.SEND_PARTIAL_LEN
+                            or partial_words - last_partial_words >= self.SEND_INCREMENT_WORDS
                         ):
-                            last_partial_len = len(text_to_transl)
                             self.translate_and_send(to_translate)
+                            last_partial_words = partial_words
 
     def wait_until_ready(self, timeout: float = None) -> bool:
         return self.transl_ready_event.wait(timeout=timeout)
@@ -563,9 +623,10 @@ class CaptionSender:
 
 class WhisperPipeline:
     def __init__(self, client_params, sender_queue: mp.Queue):
-        self.audio_queue = mp.Queue()
-        self.asr_queue = mp.Queue()
+        self.audio_queue = MPCountingQueue()
+        self.asr_queue = MPCountingQueue()
         self.transl_queue = queue.Queue()
+        self.sender_queue = sender_queue
 
         zoom_url = client_params.get("zoom_url")
 
@@ -609,6 +670,13 @@ class WhisperPipeline:
 
     def process(self, arr):
         self.audio_queue.put(arr)
+
+        self.sender_queue.put({
+            "type": "statistics",
+            "values": {
+                "asr_in_q_size": self.audio_queue.qsize(),
+            }
+        })
 
     def stop(self):
         logger.info("Stopping all threads...")
@@ -805,7 +873,7 @@ class WhisperServer:
 Runs in the subprocess: construct WhisperOnline here, then
 read audio chunks from audio_queue and put results to asr_queue.
 """
-def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: mp.Queue, sender_queue: mp.Queue, asr_ready_event):
+def asr_subprocess_main(client_params: dict, audio_queue: MPCountingQueue, asr_queue: MPCountingQueue, sender_queue: mp.Queue, asr_ready_event):
     logger = logging.getLogger("whisper_online_asr_subproc")
     logger.setLevel(client_params.get("log_level", "INFO"))
     logging.basicConfig(
@@ -825,17 +893,36 @@ def asr_subprocess_main(client_params: dict, audio_queue: mp.Queue, asr_queue: m
         "value": "asr_initialized"
     })
 
+    import time
+
     try:
         while True:
             chunk = audio_queue.get()
             if chunk is None:
                 break
 
+            sender_queue.put({
+                "type": "statistics",
+                "values": {
+                    "asr_in_q_size": audio_queue.qsize(),
+                }
+            })
+
+            proc_start = time.perf_counter()
             whisper_online.asr_proc.insert_audio_chunk(chunk)
             result = whisper_online.asr_proc.process_iter()
+            proc_end = time.perf_counter()
+
             if result and result[2]:
                 asr_queue.put(result[2])
                 logger.info(f"[ASR] {result[2]}")
+
+                sender_queue.put({
+                    "type": "statistics",
+                    "values": {
+                        "last_asr_proc_time": proc_end - proc_start,
+                    }
+                })
     except (KeyboardInterrupt, Exception):
         pass
 

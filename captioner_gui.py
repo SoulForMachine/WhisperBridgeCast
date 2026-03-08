@@ -14,6 +14,7 @@ from typing import Tuple, Callable
 import time
 
 import net_common as netc
+from status_indicator import StatusIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -234,12 +235,25 @@ def str_to_int(s):
 def clamp(x, lo, hi):
     return max(lo, min(x, hi))
 
-def count_decimal_places(num: float) -> int:
-    from decimal import Decimal
+class Stats:
+    def __init__(self):
+        self.asr_proc_time_min = float('inf')
+        self.asr_proc_time_max = 0.0
+        self.transl_proc_time_min = float('inf')
+        self.transl_proc_time_max = 0.0
 
-    d = Decimal(str(num))  # convert via string to preserve digits
-    decimals = max(0, -d.as_tuple().exponent)
-    return decimals
+    def update_asr_proc_time(self, proc_time: float):
+        if proc_time < self.asr_proc_time_min:
+            self.asr_proc_time_min = proc_time
+        if proc_time > self.asr_proc_time_max:
+            self.asr_proc_time_max = proc_time
+
+    def update_transl_proc_time(self, proc_time: float):
+        if proc_time < self.transl_proc_time_min:
+            self.transl_proc_time_min = proc_time
+        if proc_time > self.transl_proc_time_max:
+            self.transl_proc_time_max = proc_time
+
 
 class CaptionerUI:
     def __init__(self):
@@ -257,6 +271,7 @@ class CaptionerUI:
         self.results_queue = None
         self.whisper_client = None
         self.captions_overlay = None
+        self.stats: Stats = None
         self.setup_ui()
 
         self.gui_queue = queue.Queue()
@@ -279,7 +294,11 @@ class CaptionerUI:
         self.row_index_map = {}  # to keep track of grid row index - wnd/frame -> index
 
         row_idx = self.next_row()
-        url_frame = ttk.Frame(root)
+        captioner_frame = ttk.Frame(root)
+        captioner_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(captioner_frame)
+        url_frame = ttk.Frame(captioner_frame)
         url_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
 
         # make second column expand
@@ -325,8 +344,8 @@ class CaptionerUI:
 
         # --- Settings ---
 
-        row_idx = self.next_row()
-        settings_frame = ttk.Frame(root)
+        row_idx = self.next_row(captioner_frame)
+        settings_frame = ttk.Frame(captioner_frame)
         settings_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
 
         settings_notebook = ttk.Notebook(settings_frame)
@@ -523,10 +542,96 @@ class CaptionerUI:
         self.input_dev_info_label_2 = ttk.Label(dev2_tab, text="", relief="solid", padding=(4, 2), state="disabled")
         self.input_dev_info_label_2.grid(row=row_idx, column=0, columnspan=3, sticky="new", padx=5, pady=5)
 
+        # --- Stats ---
+        separator = ttk.Separator(root, orient="vertical")
+        separator.grid(row=0, column=1, sticky="ns", padx=0, pady=10)
+
+        stats_frame = ttk.Frame(root)
+        stats_frame.grid(row=0, column=2, rowspan=2, sticky="news", padx=5, pady=10)
+
+        row_idx = self.next_row(stats_frame)
+        net_server_label_frame = ttk.Frame(stats_frame)
+        net_server_label_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
+        self.net_server_status_indicator = StatusIndicator(
+            net_server_label_frame,
+            states=[
+                ("disconnected", "gray"),
+                ("connected", "green")
+            ],
+            size=16
+        )
+        self.net_server_status_indicator.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        net_server_label = ttk.Label(net_server_label_frame, text="Net server:")
+        net_server_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.net_server_status_label = ttk.Label(stats_frame, text="disconnected", anchor="w", justify="left")
+        self.net_server_status_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(stats_frame)
+        net_server_asr_label_frame = ttk.Frame(stats_frame)
+        net_server_asr_label_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
+        self.net_server_asr_status_indicator = StatusIndicator(
+            net_server_asr_label_frame,
+            states=[
+                ("uninitialized", "gray"),
+                ("initializing", "orange", 0.5),
+                ("ready", "green")
+            ],
+            size=16
+        )
+        self.net_server_asr_status_indicator.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        net_server_asr_status_label = ttk.Label(net_server_asr_label_frame, text="ASR:")
+        net_server_asr_status_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.net_server_asr_in_queue_progress = ttk.Progressbar(stats_frame, orient="horizontal", mode="determinate", maximum=10, value=0)
+        self.net_server_asr_in_queue_progress.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.net_server_asr_in_queue_label = ttk.Label(stats_frame, text="chunks queued: --", width=20)
+        self.net_server_asr_in_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        net_server_asr_proc_t_label = ttk.Label(stats_frame, text="Processing Time:")
+        net_server_asr_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.net_server_asr_proc_t_label = ttk.Label(stats_frame, text="last: --")
+        self.net_server_asr_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        self.net_server_asr_proc_t_min_label = ttk.Label(stats_frame, text="min: --")
+        self.net_server_asr_proc_t_min_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        self.net_server_asr_proc_t_max_label = ttk.Label(stats_frame, text="max: --")
+        self.net_server_asr_proc_t_max_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(stats_frame)
+        net_server_transl_label_frame = ttk.Frame(stats_frame)
+        net_server_transl_label_frame.grid(row=row_idx, column=0, sticky="ew", padx=5, pady=5)
+        self.net_server_transl_status_indicator = StatusIndicator(
+            net_server_transl_label_frame,
+            states=[
+                ("uninitialized", "gray"),
+                ("initializing", "orange", 0.5),
+                ("ready", "green")
+            ],
+            size=16
+        )
+        self.net_server_transl_status_indicator.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        net_server_transl_status_label = ttk.Label(net_server_transl_label_frame, text="Translation:")
+        net_server_transl_status_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.net_server_transl_queue_progress = ttk.Progressbar(stats_frame, orient="horizontal", mode="determinate", maximum=100, value=0)
+        self.net_server_transl_queue_progress.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.net_server_transl_queue_label = ttk.Label(stats_frame, text="words buffered: --", width=20)
+        self.net_server_transl_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Processing Time:")
+        net_server_transl_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.net_server_transl_proc_t_label = ttk.Label(stats_frame, text="last: --")
+        self.net_server_transl_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        self.net_server_transl_proc_t_min_label = ttk.Label(stats_frame, text="min: --")
+        self.net_server_transl_proc_t_min_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        self.net_server_transl_proc_t_max_label = ttk.Label(stats_frame, text="max: --")
+        self.net_server_transl_proc_t_max_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
         # --- Buttons ---
         row_idx = self.next_row()
         buttons_frame = ttk.Frame(root)
-        buttons_frame.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        buttons_frame.grid(row=row_idx, column=0, columnspan=3, sticky="e", padx=5, pady=5)
 
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
         self.quit_btn.grid(row=0, column=3, sticky="e", padx=5, pady=5)
@@ -785,6 +890,20 @@ class CaptionerUI:
             )
             self.dev_label.config(text=info_text)
 
+    def clear_net_server_stats(self):
+        self.net_server_status_label.config(text="disconnected")
+        self.net_server_asr_in_queue_progress.config(value=0)
+        self.net_server_asr_in_queue_label.config(text="chunks queued: --")
+        self.net_server_asr_proc_t_label.config(text="last: --")
+        self.net_server_asr_proc_t_min_label.config(text="min: --")
+        self.net_server_asr_proc_t_max_label.config(text="max: --")
+        self.net_server_transl_queue_progress.config(value=0)
+        self.net_server_transl_queue_label.config(text="words buffered: --")
+        self.net_server_transl_proc_t_label.config(text="last: --")
+        self.net_server_transl_proc_t_min_label.config(text="min: --")
+        self.net_server_transl_proc_t_max_label.config(text="max: --")
+        self.stats = None
+
     # Helper to manage grid row indices
     def next_row(self, widget=None):
         if not widget:
@@ -948,24 +1067,91 @@ class CaptionerUI:
 
     def whisper_client_callback(self, event_type: str, data: dict):
         match event_type:
+            case "statistics":
+                for stat_name, stat_value in data.items():
+                    match stat_name:
+                        case "asr_in_q_size":
+                            def upd_asr_q_size(stat_value=stat_value):
+                                self.net_server_asr_in_queue_progress.config(value=min(stat_value, 10))
+                                self.net_server_asr_in_queue_label.config(text=f"chunks queued: {stat_value}")
+                            self.gui_queue.put(upd_asr_q_size)
+                        case "transl_buffer_word_count":
+                            def upd_transl_q_size(stat_value=stat_value):
+                                self.net_server_transl_queue_progress.config(value=min(stat_value, 100))
+                                self.net_server_transl_queue_label.config(text=f"words buffered: {stat_value}")
+                            self.gui_queue.put(upd_transl_q_size)
+                        case "last_asr_proc_time":
+                            def upd_asr_proc_time(stat_value=stat_value):
+                                self.net_server_asr_proc_t_label.config(text=f"last: {stat_value:.3f} s")
+                                self.stats.update_asr_proc_time(stat_value)
+                                self.net_server_asr_proc_t_min_label.config(text=f"min: {self.stats.asr_proc_time_min:.3f} s")
+                                self.net_server_asr_proc_t_max_label.config(text=f"max: {self.stats.asr_proc_time_max:.3f} s")
+                            self.gui_queue.put(upd_asr_proc_time)
+                        case "last_transl_proc_time":
+                            def upd_transl_proc_time(stat_value=stat_value):
+                                self.net_server_transl_proc_t_label.config(text=f"last: {stat_value:.3f} s")
+                                self.stats.update_transl_proc_time(stat_value)
+                                self.net_server_transl_proc_t_min_label.config(text=f"min: {self.stats.transl_proc_time_min:.3f} s")
+                                self.net_server_transl_proc_t_max_label.config(text=f"max: {self.stats.transl_proc_time_max:.3f} s")
+                            self.gui_queue.put(upd_transl_proc_time)
+            case "connecting":
+                def on_connecting():
+                    self.net_server_status_label.config(text="connecting")
+                self.gui_queue.put(on_connecting)
             case "connected":
                 def on_connected():
                     self.is_connected_to_server = True
                     self.connect_btn.config(text="Disconnect", state="normal")
+                    self.stats = Stats()
+                    self.net_server_status_label.config(text="connected")
+                    self.net_server_status_indicator.set_state("connected")
                 self.gui_queue.put(on_connected)
             case "conn_lost" | "conn_shutdown" | "params_send_error":
-                self.gui_queue.put(self.on_disconnect_from_server)
+                def on_disconnect_from_server():
+                    self.on_disconnect_from_server()
+                    self.net_server_status_label.config(text="disconnected")
+                    self.net_server_status_indicator.set_state("disconnected")
+                    self.net_server_asr_status_indicator.set_state("uninitialized")
+                    self.net_server_transl_status_indicator.set_state("uninitialized")
+                    self.clear_net_server_stats()
+                self.gui_queue.put(on_disconnect_from_server)
             case "conn_error":
                 def on_conn_error():
                     self.stop_whisper_client()
                     self.connect_btn.config(text="Connect", state="normal")
                     self.record_btn.config(text="Record", state="disabled")
                     self.is_connected_to_server = False
+                    self.net_server_status_label.config(text="disconnected")
+                    self.net_server_status_indicator.set_state("disconnected")
+                    self.net_server_asr_status_indicator.set_state("uninitialized")
+                    self.net_server_transl_status_indicator.set_state("uninitialized")
+                    self.clear_net_server_stats()
                 self.gui_queue.put(on_conn_error)
+            case "disconnecting":
+                def on_disconnecting():
+                    self.net_server_status_label.config(text="disconnecting")
+                self.gui_queue.put(on_disconnecting)
             case "ready":
                 def on_ready():
                     self.record_btn.config(text="Record", state="normal")
+                    self.net_server_status_label.config(text="ready")
                 self.gui_queue.put(on_ready)
+            case "translator_initializing":
+                def on_transl_init():
+                    self.net_server_transl_status_indicator.set_state("initializing")
+                self.gui_queue.put(on_transl_init)
+            case "translator_initialized":
+                def on_transl_initialized():
+                    self.net_server_transl_status_indicator.set_state("ready")
+                self.gui_queue.put(on_transl_initialized)
+            case "asr_initializing":
+                def on_asr_init():
+                    self.net_server_asr_status_indicator.set_state("initializing")
+                self.gui_queue.put(on_asr_init)
+            case "asr_initialized":
+                def on_asr_initialized():
+                    self.net_server_asr_status_indicator.set_state("ready")
+                self.gui_queue.put(on_asr_initialized)
 
     def audio_producer_callback(self, event_type: str, data: dict):
         match event_type:
@@ -1360,6 +1546,7 @@ class WhisperClient:
             self.whisper_client_thread = None
 
     def run(self):
+        self.notif_callback("connecting", {})
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.server_url, self.port))
@@ -1394,6 +1581,7 @@ class WhisperClient:
                         "command": "stop"
                     })
                     sock.shutdown(socket.SHUT_WR)
+                    self.notif_callback("disconnecting", {})
                     break
 
                 netc.send_ndarray(sock, chunk)
@@ -1430,7 +1618,15 @@ class WhisperClient:
                 continue
 
             msg_type = msg.get("type")
-            if msg_type == "status":
+            if msg_type == "translation":
+                if self.results_queue:
+                    text, complete = msg.get("text"), msg.get("complete")
+                    if text and complete is not None:
+                        self.results_queue.put((text, complete))
+            elif msg_type == "statistics":
+                values = msg.get("values", {})
+                self.notif_callback("statistics", values)
+            elif msg_type == "status":
                 match msg.get("value"):
                     case "ready":
                         # Here we handle the notification that the server is ready to receive audio.
@@ -1440,17 +1636,16 @@ class WhisperClient:
                         break
                     case "translator_initializing":
                         logger.info("Translation engine is initializing...")
+                        self.notif_callback("translator_initializing", {})
                     case "translator_initialized":
                         logger.info("Translation engine initialized.")
+                        self.notif_callback("translator_initialized", {})
                     case "asr_initializing":
                         logger.info("ASR engine is initializing...")
+                        self.notif_callback("asr_initializing", {})
                     case "asr_initialized":
                         logger.info("ASR engine initialized.")
-            elif msg_type == "translation":
-                if self.results_queue:
-                    text, complete = msg.get("text"), msg.get("complete")
-                    if text and complete is not None:
-                        self.results_queue.put((text, complete))
+                        self.notif_callback("asr_initialized", {})
             else:
                 logger.warning(f"Unknown message: {msg}")
 

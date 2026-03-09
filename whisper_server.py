@@ -138,13 +138,14 @@ class ASRProcessor:
 
         self.asr_subproc = None
         self.asr_ready_event = mp.Event()
+        self.shutdown_event = mp.Event()
         self.is_running = False
 
     def start(self):
         if not self.is_running:
             self.asr_subproc = mp.Process(
                 target=asr_subprocess_main,
-                args=(self.client_params, self.audio_queue, self.result_queue, self.sender_queue, self.asr_ready_event),
+                args=(self.client_params, self.audio_queue, self.result_queue, self.sender_queue, self.asr_ready_event, self.shutdown_event),
                 daemon=False
             )
             self.asr_subproc.start()
@@ -152,9 +153,12 @@ class ASRProcessor:
 
     def stop(self):
         if self.is_running:
+            self.shutdown_event.set()
             self.audio_queue.put(None)
             self.asr_subproc.join()
             self.asr_subproc = None
+            self.asr_ready_event = None
+            self.shutdown_event = None
             self.is_running = False
 
     def wait_until_ready(self, timeout: float = None) -> bool:
@@ -395,17 +399,20 @@ class Translator:
     def start(self):
         if not self.is_running:
             self.transl_ready_event = threading.Event()
+            self.shutdown_event = threading.Event()
             self.transl_thread = threading.Thread(target=self.run)
             self.transl_thread.start()
             self.is_running = True
 
     def stop(self):
         if self.is_running:
+            self.shutdown_event.set()
             self.source_queue.put(None)
             self.transl_thread.join()
             self.transl_thread = None
             self.is_running = False
             self.transl_ready_event = None
+            self.shutdown_event = None
 
     def initialize_engine(self):
         self.engine = None
@@ -441,7 +448,7 @@ class Translator:
         last_partial_words = 0
         self.transl_ready_event.set()
 
-        while True:
+        while not self.shutdown_event.is_set():
             # If the queue is empty, wait for new text with a timeout if there is buffered text, otherwise wait indefinitely.
             if self.source_queue.qsize() == 0:
                 try:
@@ -873,7 +880,13 @@ class WhisperServer:
 Runs in the subprocess: construct WhisperOnline here, then
 read audio chunks from audio_queue and put results to asr_queue.
 """
-def asr_subprocess_main(client_params: dict, audio_queue: MPCountingQueue, asr_queue: MPCountingQueue, sender_queue: mp.Queue, asr_ready_event):
+def asr_subprocess_main(
+        client_params: dict, 
+        audio_queue: MPCountingQueue, 
+        asr_queue: MPCountingQueue, 
+        sender_queue: mp.Queue, 
+        asr_ready_event,
+        shutdown_event):
     logger = logging.getLogger("whisper_online_asr_subproc")
     logger.setLevel(client_params.get("log_level", "INFO"))
     logging.basicConfig(
@@ -896,7 +909,7 @@ def asr_subprocess_main(client_params: dict, audio_queue: MPCountingQueue, asr_q
     import time
 
     try:
-        while True:
+        while not shutdown_event.is_set():
             chunk = audio_queue.get()
             if chunk is None:
                 break

@@ -393,7 +393,7 @@ class CaptionerUI:
 
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Non-speech probability\nthreshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(whisper_tab, text="Non-speech threshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.threshold_var = tk.DoubleVar(value=0.9)
         self.threshold_slider = tk.Scale(whisper_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
                                          command=lambda val: self.threshold_label.config(text=f"{float(val):.2f}"))
@@ -401,24 +401,51 @@ class CaptionerUI:
         self.threshold_label = ttk.Label(whisper_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
         self.threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
-        # === Minimum chunk size ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Minimum chunk size (sec)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.min_chunk_size_var = tk.DoubleVar(value=0.6)
-        self.min_chunk_size_slider = tk.Scale(whisper_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.min_chunk_size_var,
-                                              command=lambda val: self.min_chunk_size_label.config(text=f"{float(val):.1f}"))
-        self.min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.min_chunk_size_label = ttk.Label(whisper_tab, text=f"{self.min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
-        self.min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
-
-        # === Checkboxes ===
+        # === VAD/VAC ===
         row_idx = self.next_row(whisper_tab)
         self.vac_var = tk.BooleanVar(value=True)
-        self.vad_var = tk.BooleanVar(value=True)
         self.vac_check = ttk.Checkbutton(whisper_tab, text="Voice activity controller", variable=self.vac_var)
-        self.vad_check = ttk.Checkbutton(whisper_tab, text="Voice activity detection", variable=self.vad_var)
         self.vac_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+
         row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vac_min_chunk_size_var = tk.DoubleVar(value=0.6)
+        self.vac_min_chunk_size_slider = tk.Scale(whisper_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
+                                                  command=lambda val: self.vac_min_chunk_size_label.config(text=f"{float(val):.1f}"))
+        self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vac_min_chunk_size_label = ttk.Label(whisper_tab, text=f"{self.vac_min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.vac_min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="VAD threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_threshold_var = tk.DoubleVar(value=0.5)
+        self.vad_threshold_slider = tk.Scale(whisper_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_threshold_var,
+                                         command=lambda val: self.vad_threshold_label.config(text=f"{float(val):.2f}"))
+        self.vad_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_threshold_label = ttk.Label(whisper_tab, text=f"{self.vad_threshold_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="VAD min. silence (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_min_silence_duration_var = tk.DoubleVar(value=1.0)
+        self.vad_min_silence_duration_slider = tk.Scale(whisper_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vad_min_silence_duration_var,
+                                              command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
+        self.vad_min_silence_duration_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_min_silence_duration_label = ttk.Label(whisper_tab, text=f"{self.vad_min_silence_duration_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_min_silence_duration_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="Speech pad (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_speech_pad_var = tk.DoubleVar(value=1.0)
+        self.vad_speech_pad_slider = tk.Scale(whisper_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vad_speech_pad_var,
+                                              command=lambda val: self.vad_speech_pad_label.config(text=f"{float(val):.1f}"))
+        self.vad_speech_pad_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_speech_pad_label = ttk.Label(whisper_tab, text=f"{self.vad_speech_pad_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_speech_pad_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_tab)
+        self.vad_var = tk.BooleanVar(value=False)
+        self.vad_check = ttk.Checkbutton(whisper_tab, text="Whisper voice activity detection", variable=self.vad_var)
         self.vad_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         # +++ Translation tab +++
@@ -463,8 +490,18 @@ class CaptionerUI:
         audio_tab = ttk.Frame(settings_notebook, padding=10)
         settings_notebook.add(audio_tab, text="Audio")
 
+        row_idx = self.next_row(audio_tab)
+        ttk.Label(audio_tab, text="Audio chunk size (s)").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.audio_chunk_size_var = tk.DoubleVar(value=0.6)
+        self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.audio_chunk_size_var,
+                                                  command=lambda val: self.audio_chunk_size_label.config(text=f"{float(val):.1f}"))
+        self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.audio_chunk_size_label = ttk.Label(audio_tab, text=f"{self.audio_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.audio_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
         devices_notebook = ttk.Notebook(audio_tab)
-        devices_notebook.pack(fill="both", expand=True)
+        row_idx = self.next_row(audio_tab)
+        devices_notebook.grid(row=row_idx, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
 
         self.device_map = list_unique_input_devices()
         device_list = list(self.device_map.keys())
@@ -561,7 +598,7 @@ class CaptionerUI:
             size=16
         )
         self.net_server_status_indicator.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        net_server_label = ttk.Label(net_server_label_frame, text="Net server:")
+        net_server_label = ttk.Label(net_server_label_frame, text="Server status:")
         net_server_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         self.net_server_status_label = ttk.Label(stats_frame, text="disconnected", anchor="w", justify="left")
         self.net_server_status_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -585,8 +622,21 @@ class CaptionerUI:
         self.net_server_asr_in_queue_progress.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.net_server_asr_in_queue_label = ttk.Label(stats_frame, text="chunks queued: --", width=20)
         self.net_server_asr_in_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
         row_idx = self.next_row(stats_frame)
-        net_server_asr_proc_t_label = ttk.Label(stats_frame, text="Processing Time:")
+        ttk.Label(stats_frame, text="Voice activity:").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.net_server_asr_vac_indicator = StatusIndicator(
+            stats_frame,
+            states=[
+                ("nonvoice", "gray"),
+                ("voice", "green")
+            ],
+            size=16
+        )
+        self.net_server_asr_vac_indicator.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(stats_frame)
+        net_server_asr_proc_t_label = ttk.Label(stats_frame, text="Processing time:")
         net_server_asr_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_asr_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_asr_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -617,7 +667,7 @@ class CaptionerUI:
         self.net_server_transl_queue_label = ttk.Label(stats_frame, text="words buffered: --", width=20)
         self.net_server_transl_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
-        net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Processing Time:")
+        net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Processing time:")
         net_server_transl_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_transl_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_transl_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -920,7 +970,10 @@ class CaptionerUI:
             return False
 
         threshold = self.threshold_var.get()
-        min_chunk_size = self.min_chunk_size_var.get()
+        vac_min_chunk_size = self.vac_min_chunk_size_var.get()
+        vad_threshold = self.vad_threshold_var.get()
+        vad_min_silence_duration = self.vad_min_silence_duration_var.get()
+        vad_speech_pad = self.vad_speech_pad_var.get()
 
         server_url = self.server_url_var.get().strip()
         if not server_url:
@@ -947,9 +1000,12 @@ class CaptionerUI:
             f"\t  Enable translation: {self.enable_translation_var.get()}\n"
             f"\t  Target language: {self.target_lang_var.get()}\n"
             f"\t  Threshold: {self.threshold_var.get()}\n"
-            f"\t  Minimum chunk size: {self.min_chunk_size_var.get()}\n"
             f"\t  VAC enabled: {self.vac_var.get()}\n"
-            f"\t  VAD enabled: {self.vad_var.get()}\n"
+            f"\t  VAC minimum chunk size: {vac_min_chunk_size}\n"
+            f"\t  VAD threshold: {vad_threshold}\n"
+            f"\t  VAD minimum silence duration: {vad_min_silence_duration} s\n"
+            f"\t  VAD speech pad: {vad_speech_pad} s\n"
+            f"\t  Whisper VAD enabled: {self.vad_var.get()}\n"
         )
         logger.info(info_str)
 
@@ -964,9 +1020,12 @@ class CaptionerUI:
             "translation_engine": transl_engine,
             "translation_params": transl_params,
             "nsp_threshold": threshold,
-            "min_chunk_size": min_chunk_size,
             "vac": self.vac_var.get(),
-            "vad": self.vad_var.get(),
+            "vac_min_chunk_size": vac_min_chunk_size,
+            "vad_threshold": vad_threshold,
+            "vad_min_silence_duration_ms": int(vad_min_silence_duration * 1000),
+            "vad_speech_pad_ms": int(vad_speech_pad * 1000),
+            "whisper_vad": self.vad_var.get(),
         }
 
         self.audio_queue = queue.Queue()
@@ -996,7 +1055,7 @@ class CaptionerUI:
         self.captions_overlay.start()
 
     def create_audio_producer(self):
-        min_chunk_size = self.min_chunk_size_var.get()
+        audio_chunk_size = self.audio_chunk_size_var.get()
         use_second_dev = self.use_second_audio_dev_var.get()
         self.audio_producer_state_map.clear()
 
@@ -1006,7 +1065,7 @@ class CaptionerUI:
 
             self.audio_temp_queue_1 = queue.Queue()
             self.audio_producer = AudioStreamProducer(
-                min_chunk_size,
+                audio_chunk_size,
                 self.selected_device_1_info,
                 self.audio_temp_queue_1,
                 self.audio_producer_callback
@@ -1015,7 +1074,7 @@ class CaptionerUI:
 
             self.audio_temp_queue_2 = queue.Queue()
             self.audio_producer_2 = AudioStreamProducer(
-                min_chunk_size,
+                audio_chunk_size,
                 self.selected_device_2_info,
                 self.audio_temp_queue_2,
                 self.audio_producer_callback
@@ -1034,7 +1093,7 @@ class CaptionerUI:
 
             # We use one device, puts the results directly to the audio_queue.
             self.audio_producer = AudioStreamProducer(
-                min_chunk_size,
+                audio_chunk_size,
                 self.selected_device_1_info,
                 self.audio_queue,
                 self.audio_producer_callback
@@ -1094,6 +1153,12 @@ class CaptionerUI:
                                 self.net_server_transl_proc_t_min_label.config(text=f"min: {self.stats.transl_proc_time_min:.3f} s")
                                 self.net_server_transl_proc_t_max_label.config(text=f"max: {self.stats.transl_proc_time_max:.3f} s")
                             self.gui_queue.put(upd_transl_proc_time)
+                        case "vac_voice_status":
+                            def upd_vac_state(stat_value=stat_value):
+                                if stat_value is None:
+                                    stat_value = "nonvoice"
+                                self.net_server_asr_vac_indicator.set_state(stat_value)
+                            self.gui_queue.put(upd_vac_state)
             case "connecting":
                 def on_connecting():
                     self.net_server_status_label.config(text="connecting")

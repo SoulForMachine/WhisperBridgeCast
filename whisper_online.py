@@ -644,7 +644,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
     When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
     '''
 
-    def __init__(self, online_chunk_size, *a, **kw):
+    def __init__(self, online_chunk_size, vad_threshold, vad_min_silence_duration_ms, vad_speech_pad_ms, *a, **kw):
         self.online_chunk_size = online_chunk_size
 
         self.online = OnlineASRProcessor(*a, **kw)
@@ -656,7 +656,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
             model='silero_vad'
         )
         from silero_vad_iterator import FixedVADIterator
-        self.vac = FixedVADIterator(model)  # we use the default options there: 500ms silence, 100ms padding, etc.  
+        self.vac = FixedVADIterator(model, threshold=vad_threshold, min_silence_duration_ms=vad_min_silence_duration_ms, speech_pad_ms=vad_speech_pad_ms)
 
         self.logfile = self.online.logfile
         self.init()
@@ -675,7 +675,6 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
     def clear_buffer(self):
         self.buffer_offset += len(self.audio_buffer)
         self.audio_buffer = np.array([],dtype=np.float32)
-
 
     def insert_audio_chunk(self, audio):
         res = self.vac(audio)
@@ -717,7 +716,6 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
                 # But we trim it to prevent OOM. 
                 self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
                 self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
-
 
     def process_iter(self):
         if self.is_currently_final:
@@ -805,7 +803,7 @@ def asr_factory(args, logfile=sys.stderr):
         logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
-    if getattr(args, 'vad', False):  # Checks if VAD argument is present and True
+    if getattr(args, 'whisper_vad', False):  # Checks if VAD argument is present and True
         logger.info("Setting VAD filter")
         asr.use_vad()
 
@@ -824,8 +822,7 @@ def asr_factory(args, logfile=sys.stderr):
 
     # Create the OnlineASRProcessor
     if args.vac:
-        
-        online = VACOnlineASRProcessor(args.min_chunk_size, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+        online = VACOnlineASRProcessor(args.vac_min_chunk_size, args.vad_threshold, args.vad_min_silence_duration_ms, args.vad_speech_pad_ms, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
     else:
         online = OnlineASRProcessor(asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
 

@@ -48,7 +48,7 @@ class WhisperServerParams:
         self.zoom_url = ""
 
         # Audio processing
-        self.min_chunk_size = 1.0
+        self.vac_min_chunk_size = 1.0
 
         # Whisper model
         self.model = 'large-v2'
@@ -66,8 +66,10 @@ class WhisperServerParams:
 
         # Voice activity detection
         self.vac = False
-        self.vac_chunk_size = 0.04
-        self.vad = False
+        self.vad_threshold = 0.5
+        self.vad_min_silence_duration_ms = 1000
+        self.vad_speech_pad_ms = 1000
+        self.whisper_vad = False
 
         # Buffer trimming
         self.buffer_trimming = 'segment'
@@ -126,6 +128,9 @@ class WhisperOnline:
     # Not used for now, as we create a new object for each client
     def clear(self):
         self.asr_proc.init()
+
+    def has_vac(self) -> bool:
+        return hasattr(self.asr_proc, "vac") and self.asr_proc.vac is not None
 
 ######### ASR processor
 
@@ -906,6 +911,9 @@ def asr_subprocess_main(
         "value": "asr_initialized"
     })
 
+    has_vac = whisper_online.has_vac()
+    last_vac_status = None
+
     import time
 
     try:
@@ -925,6 +933,15 @@ def asr_subprocess_main(
             whisper_online.asr_proc.insert_audio_chunk(chunk)
             result = whisper_online.asr_proc.process_iter()
             proc_end = time.perf_counter()
+
+            if has_vac and whisper_online.asr_proc.status != last_vac_status:
+                last_vac_status = whisper_online.asr_proc.status
+                sender_queue.put({
+                    "type": "statistics",
+                    "values": {
+                        "vac_voice_status": last_vac_status,
+                    }
+                })
 
             if result and result[2]:
                 asr_queue.put(result[2])

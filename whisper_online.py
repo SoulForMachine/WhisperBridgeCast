@@ -712,10 +712,13 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
                 self.current_online_chunk_buffer_size += len(self.audio_buffer)
                 self.clear_buffer()
             else:
-                # We keep 1 second because VAD may later find start of voice in it.
-                # But we trim it to prevent OOM. 
-                self.buffer_offset += max(0,len(self.audio_buffer)-self.SAMPLING_RATE)
-                self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE:]
+                # Keep at least the last second of silence, and up to configured VAD speech padding;
+                # VAD may later find start of voice in it.
+                # Trim anything older to avoid unbounded growth.
+                pad_samples = max(self.SAMPLING_RATE, int(math.ceil(self.vac.speech_pad_samples)))
+                trim = max(0, len(self.audio_buffer) - pad_samples)
+                self.buffer_offset += trim
+                self.audio_buffer = self.audio_buffer[-pad_samples:]
 
     def process_iter(self):
         if self.is_currently_final:

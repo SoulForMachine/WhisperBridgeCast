@@ -15,6 +15,7 @@ import time
 
 import net_common as netc
 from status_indicator import StatusIndicator
+from graph_widget import GraphWidget
 
 logger = logging.getLogger(__name__)
 
@@ -641,6 +642,8 @@ class CaptionerUI:
         net_server_asr_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_asr_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_asr_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        self.net_server_asr_proc_t_graph = GraphWidget(stats_frame, width=100, height=50, line_color="blue", border_color="black", bg_color="lightgray", max_points=30)
+        self.net_server_asr_proc_t_graph.grid(row=row_idx, column=2, rowspan=3, sticky="wn", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
         self.net_server_asr_proc_t_min_label = ttk.Label(stats_frame, text="min: --")
         self.net_server_asr_proc_t_min_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -672,6 +675,8 @@ class CaptionerUI:
         net_server_transl_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_transl_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_transl_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        self.net_server_transl_proc_t_graph = GraphWidget(stats_frame, width=100, height=50, line_color="blue", border_color="black", bg_color="lightgray", max_points=30)
+        self.net_server_transl_proc_t_graph.grid(row=row_idx, column=2, rowspan=3, sticky="wn", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
         self.net_server_transl_proc_t_min_label = ttk.Label(stats_frame, text="min: --")
         self.net_server_transl_proc_t_min_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -948,11 +953,13 @@ class CaptionerUI:
         self.net_server_asr_proc_t_label.config(text="last: --")
         self.net_server_asr_proc_t_min_label.config(text="min: --")
         self.net_server_asr_proc_t_max_label.config(text="max: --")
+        self.net_server_asr_proc_t_graph.clear()
         self.net_server_transl_queue_progress.config(value=0)
         self.net_server_transl_queue_label.config(text="words buffered: --")
         self.net_server_transl_proc_t_label.config(text="last: --")
         self.net_server_transl_proc_t_min_label.config(text="min: --")
         self.net_server_transl_proc_t_max_label.config(text="max: --")
+        self.net_server_transl_proc_t_graph.clear()
         self.stats = None
 
     # Helper to manage grid row indices
@@ -1146,6 +1153,7 @@ class CaptionerUI:
                                 self.stats.update_asr_proc_time(stat_value)
                                 self.net_server_asr_proc_t_min_label.config(text=f"min: {self.stats.asr_proc_time_min:.3f} s")
                                 self.net_server_asr_proc_t_max_label.config(text=f"max: {self.stats.asr_proc_time_max:.3f} s")
+                                self.net_server_asr_proc_t_graph.add_value(stat_value)
                             self.gui_queue.put(upd_asr_proc_time)
                         case "last_transl_proc_time":
                             def upd_transl_proc_time(stat_value=stat_value):
@@ -1153,6 +1161,7 @@ class CaptionerUI:
                                 self.stats.update_transl_proc_time(stat_value)
                                 self.net_server_transl_proc_t_min_label.config(text=f"min: {self.stats.transl_proc_time_min:.3f} s")
                                 self.net_server_transl_proc_t_max_label.config(text=f"max: {self.stats.transl_proc_time_max:.3f} s")
+                                self.net_server_transl_proc_t_graph.add_value(stat_value)
                             self.gui_queue.put(upd_transl_proc_time)
                         case "vac_voice_status":
                             def upd_vac_state(stat_value=stat_value):

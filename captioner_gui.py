@@ -269,7 +269,9 @@ class CaptionerUI:
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
         self.audio_queue = None
-        self.results_queue = None
+        self.captions_input_queue = None
+        self.websrv_input_queue = None
+        self.websrv = None
         self.whisper_client = None
         self.captions_overlay = None
         self.stats: Stats = None
@@ -1037,13 +1039,14 @@ class CaptionerUI:
         }
 
         self.audio_queue = queue.Queue()
-        self.results_queue = queue.Queue()
+        self.captions_input_queue = queue.Queue()
+        self.websrv_input_queue = queue.Queue()
         self.whisper_client = WhisperClient(
             server_url,
             port,
             params,
             self.audio_queue,
-            self.results_queue,
+            [self.captions_input_queue, self.websrv_input_queue],
             self.whisper_client_callback
         )
         self.whisper_client.start()
@@ -1056,11 +1059,16 @@ class CaptionerUI:
             self.whisper_client.stop()
             self.whisper_client = None
             self.audio_queue = None
-            self.results_queue = None
+            self.captions_input_queue = None
+            self.websrv_input_queue = None
 
     def run_captions_overlay(self):
-        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.results_queue, self.gui_queue)
+        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.captions_input_queue, self.gui_queue)
         self.captions_overlay.start()
+
+        from web_server import WebTranscriptServer
+        self.websrv = WebTranscriptServer()
+        self.websrv.start(self.websrv_input_queue)
 
     def create_audio_producer(self):
         audio_chunk_size = self.audio_chunk_size_var.get()
@@ -1128,6 +1136,11 @@ class CaptionerUI:
             logger.info("Stopping captions overlay...")
             self.captions_overlay.stop()
             self.captions_overlay = None
+
+        if self.websrv:
+            logger.info("Stopping web transcript server...")
+            self.websrv.stop()
+            self.websrv = None
 
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
@@ -1594,13 +1607,13 @@ class WhisperClient:
             port: int,
             params: map,
             audio_queue: queue.Queue,
-            results_queue: queue.Queue,
+            output_queues: list[queue.Queue],
             notif_callback: Callable[[str, dict], None]=None):
         self.server_url = server_url
         self.port = port
         self.params = params
         self.audio_queue = audio_queue
-        self.results_queue = results_queue
+        self.output_queues = output_queues
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
         self.connected_event = threading.Event()
         self.results_thread = None
@@ -1694,10 +1707,10 @@ class WhisperClient:
 
             msg_type = msg.get("type")
             if msg_type == "translation":
-                if self.results_queue:
-                    text, complete = msg.get("text"), msg.get("complete")
+                text, complete = msg.get("text"), msg.get("complete")
+                for out_q in self.output_queues:
                     if text and complete is not None:
-                        self.results_queue.put((text, complete))
+                        out_q.put((text, complete))
             elif msg_type == "statistics":
                 values = msg.get("values", {})
                 self.notif_callback("statistics", values)

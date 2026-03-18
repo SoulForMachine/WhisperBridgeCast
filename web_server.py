@@ -19,9 +19,17 @@ class WebTranscriptServer:
         server.stop()
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+        certfile: str | None = None,
+        keyfile: str | None = None,
+    ):
         self.host = host
         self.port = port
+        self.certfile = certfile
+        self.keyfile = keyfile
 
         self._httpd: ThreadingHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
@@ -48,6 +56,14 @@ class WebTranscriptServer:
 
         handler_cls = self._make_handler()
         self._httpd = ThreadingHTTPServer((self.host, self.port), handler_cls)
+
+        if self.certfile:
+            import ssl
+
+            context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            context.load_cert_chain(certfile=self.certfile, keyfile=self.keyfile)
+            self._httpd.socket = context.wrap_socket(self._httpd.socket, server_side=True)
+
         self._server_thread = threading.Thread(
             target=self._httpd.serve_forever, name="WebTranscriptServer", daemon=True
         )
@@ -285,6 +301,14 @@ class WebTranscriptServer:
     }
     header h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; }
     header .hint { color: var(--muted); font-size: 13px; }
+    header .hint a,
+    header .hint a:visited,
+    header .hint a:hover,
+    header .hint a:active {
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+    }
     main { max-width: 900px; margin: 0 auto; padding: 8px 16px 24px; }
     section.stream {
       background: var(--panel);
@@ -333,7 +357,7 @@ class WebTranscriptServer:
 <body>
   <header>
     <h1>Live Transcript</h1>
-    <div class="hint">Auto-scroll only when you are at the bottom. <a href="#bottom">Go to latest</a></div>
+    <div class="hint">Auto-scroll only when you are at the bottom. <a id="jump-bottom" href="#">Go to latest</a></div>
   </header>
   <main>
     <section class="stream">
@@ -343,6 +367,8 @@ class WebTranscriptServer:
   </main>
   <script>
     const entriesBox = document.getElementById("entries");
+    const jumpLink = document.getElementById("jump-bottom");
+    let wakeLock = null;
 
     function atBottom() {
       const threshold = 16;
@@ -392,7 +418,7 @@ class WebTranscriptServer:
       entry.appendChild(rowTrans);
 
       if (stick) {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
       }
     }
 
@@ -412,6 +438,34 @@ class WebTranscriptServer:
     es.onerror = () => {
       console.warn("Connection lost, retrying...");
     };
+
+    jumpLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+    });
+
+    // Keep screen on where supported (primarily Chromium-based mobile browsers).
+    async function requestWakeLock() {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener("release", () => console.log("WakeLock released"));
+        }
+      } catch (err) {
+        console.warn("WakeLock not available:", err);
+      }
+    }
+
+    // Wake lock typically requires a user gesture and HTTPS; try on first tap and when tab refocuses.
+    document.addEventListener("visibilitychange", async () => {
+      if (document.visibilityState === "visible") {
+        await requestWakeLock();
+      }
+    });
+    // Try again on each user gesture to satisfy user-activation requirements.
+    document.addEventListener("pointerdown", async () => {
+      await requestWakeLock();
+    });
   </script>
 </body>
 </html>"""

@@ -327,14 +327,14 @@ class Translator:
             except Exception as e:
                 return f"[Translation Exception]: {e}."
 
-    def __init__(self, engine_id, engine_params, src_lang, target_lang, source_queue, result_queue, sender_queue: mp.Queue, only_complete_sent: bool):
+    def __init__(self, engine_id, engine_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
         self.engine_id = engine_id
         self.engine_params = engine_params
         self.engine = None
         self.src_lang = src_lang
         self.target_lang = target_lang
         self.source_queue = source_queue
-        self.result_queue = result_queue
+        self.output_queues = output_queues
         self.sender_queue = sender_queue
         self.only_complete_sent = only_complete_sent
         self.current_text = ""
@@ -390,7 +390,8 @@ class Translator:
             proc_start = time.perf_counter()
             transl_text = self.engine.translate_text(text[0])
             proc_end = time.perf_counter()
-            self.result_queue.put((transl_text, text[1]))
+            for out_q in self.output_queues:
+                out_q.put((transl_text, text[1]))
 
             self.sender_queue.put({
                 "type": "statistics",
@@ -399,7 +400,8 @@ class Translator:
                 }
             })
         else:
-            self.result_queue.put(text)
+            for out_q in self.output_queues:
+                 out_q.put(text)
 
     def start(self):
         if not self.is_running:
@@ -637,7 +639,8 @@ class WhisperPipeline:
     def __init__(self, client_params, sender_queue: mp.Queue):
         self.audio_queue = MPCountingQueue()
         self.asr_queue = MPCountingQueue()
-        self.transl_queue = queue.Queue()
+        self.caption_sender_queue = queue.Queue()
+        self.websrv_input_queue = queue.Queue()
         self.sender_queue = sender_queue
 
         zoom_url = client_params.get("zoom_url")
@@ -660,7 +663,7 @@ class WhisperPipeline:
             language,
             target_language,
             self.asr_queue,
-            self.transl_queue,
+            [self.caption_sender_queue, self.websrv_input_queue],
             sender_queue,
             only_complete_sent=bool(zoom_url)
         )
@@ -670,11 +673,16 @@ class WhisperPipeline:
         capt_lang_code = get_lang_code(capt_lang)
         if zoom_url:
             zoom_url = zoom_url.strip()
-            self.transl_queue.put(("...", True))  # to warm up Zoom
-            self.caption_sender = ZoomCaptionSender(self.transl_queue, zoom_url, capt_lang_code)
+            self.caption_sender_queue.put(("...", True))  # to warm up Zoom
+            self.caption_sender = ZoomCaptionSender(self.caption_sender_queue, zoom_url, capt_lang_code)
         else:
-            self.caption_sender = CaptionSender(self.transl_queue, sender_queue, capt_lang_code)
+            self.caption_sender = CaptionSender(self.caption_sender_queue, sender_queue, capt_lang_code)
         self.caption_sender.start()
+
+        logger.info("Starting transcript web server...")
+        from web_server import WebTranscriptServer
+        self.websrv = WebTranscriptServer()
+        self.websrv.start(self.websrv_input_queue)
 
         logger.info("Starting ASR thread...")
         self.asr_proc = ASRProcessor(client_params, self.audio_queue, self.asr_queue, sender_queue)
@@ -702,9 +710,13 @@ class WhisperPipeline:
         logger.info("Caption sender thread exiting...")
         self.caption_sender.stop()
 
+        logger.info("Web server thread exiting...")
+        self.websrv.stop()
+
         self.asr_proc = None
         self.translator = None
         self.caption_sender = None
+        self.websrv = None
 
     def wait_until_ready(self):
         for cmp in [self.translator, self.caption_sender, self.asr_proc]:

@@ -15,15 +15,27 @@ def send_ndarray(sock: socket.socket, arr: np.ndarray):
     header = bytes([MSG_TYPE_AUDIO]) + len(payload).to_bytes(4, byteorder="big")
     sock.sendall(header + payload)
 
+def recv_all(sock: socket.socket, n: int) -> bytes | None:
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
 def recv_message(sock: socket.socket):
-    header = sock.recv(5)
+    header = recv_all(sock, 5)
     if not header:
         return None, None
 
     msg_type = header[0]
     msg_len = int.from_bytes(header[1:5], "big")
 
-    payload = sock.recv(msg_len)
+    payload = recv_all(sock, msg_len)
+    if payload is None:
+        return None, None
+
     if msg_type == MSG_TYPE_JSON:
         return "json", json.loads(payload.decode("utf8"))
     elif msg_type == MSG_TYPE_AUDIO:

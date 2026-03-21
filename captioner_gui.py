@@ -268,8 +268,8 @@ class CaptionerUI:
         self.audio_producer_state_map = {}  # device_index -> "open" | "closed"
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
-        self.audio_queue = None
-        self.captions_input_queue = None
+        self.net_send_queue = None
+        self.net_recv_queue = None
         self.whisper_client = None
         self.captions_overlay = None
         self.stats: Stats = None
@@ -428,7 +428,7 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="VAD min. silence (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_min_silence_duration_var = tk.DoubleVar(value=0.5)
+        self.vad_min_silence_duration_var = tk.DoubleVar(value=1.0)
         self.vad_min_silence_duration_slider = tk.Scale(whisper_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vad_min_silence_duration_var,
                                               command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
         self.vad_min_silence_duration_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -580,6 +580,29 @@ class CaptionerUI:
         self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.audio_chunk_size_label = ttk.Label(audio_tab, text=f"{self.audio_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
         self.audio_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        # +++ Captions tab +++
+        captions_tab = ttk.Frame(settings_notebook, padding=10)
+        settings_notebook.add(captions_tab, text="Captions overlay")
+        row_idx = self.next_row(captions_tab)
+        self.show_captions_overlay_btn = ttk.Button(captions_tab, text="Show overlay", state="disabled", command=self.toggle_show_captions_overlay)
+        self.show_captions_overlay_btn.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(captions_tab)
+        ttk.Label(captions_tab, text="Font size").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.captions_font_size_var = tk.IntVar(value=24)
+        self.captions_font_size_slider = tk.Scale(captions_tab, from_=12, to=72, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_font_size_var,
+                                                  command=lambda val: self.captions_font_size_label.config(text=f"{int(val)}"))
+        self.captions_font_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.captions_font_size_label = ttk.Label(captions_tab, text=f"{self.captions_font_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.captions_font_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(captions_tab)
+        ttk.Label(captions_tab, text="Max visible lines").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.captions_max_visible_lines_var = tk.IntVar(value=4)
+        self.captions_max_visible_lines_slider = tk.Scale(captions_tab, from_=2, to=8, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_max_visible_lines_var,
+                                                  command=lambda val: self.captions_max_visible_lines_label.config(text=f"{int(val)}"))
+        self.captions_max_visible_lines_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.captions_max_visible_lines_label = ttk.Label(captions_tab, text=f"{self.captions_max_visible_lines_var.get()}", width=5, relief="flat", anchor="center")
+        self.captions_max_visible_lines_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # --- Stats ---
         separator = ttk.Separator(root, orient="vertical")
@@ -757,7 +780,8 @@ class CaptionerUI:
                 self.mute_btn_2.config(text="🔇")
 
     def quit(self):
-        self.stop_captioner()
+        self.stop_captions_overlay()
+        self.stop_audio_producers()
         self.stop_whisper_client()
         self.root_wnd.quit()
         self.root_wnd.destroy()
@@ -798,7 +822,8 @@ class CaptionerUI:
 
     def on_stop_recording(self):
         if self.is_recording:
-            self.stop_captioner()
+            self.stop_captions_overlay()
+            self.stop_audio_producers()
             logger.info("Recording stopped.")
 
     def on_enable_translation_toggle(self):
@@ -935,6 +960,25 @@ class CaptionerUI:
         )
         self.audio_device_block_dur_label_2.config(text=info_text)
 
+    def toggle_show_captions_overlay(self):
+        if not self.net_send_queue:
+            return
+
+        if self.captions_overlay is None:
+            self.start_captions_overlay()
+            self.net_send_queue.put({
+                "type": "control",
+                "command": "start_sending_client_transcript"
+            })
+            self.show_captions_overlay_btn.config(text="Hide overlay")
+        else:
+            self.stop_captions_overlay()
+            self.net_send_queue.put({
+                "type": "control",
+                "command": "stop_sending_client_transcript"
+            })
+            self.show_captions_overlay_btn.config(text="Show overlay")
+
     def update_selected_devices_label(self):
         if not self.is_recording:
             dev1_name = self.audio_device_combo_1.get()
@@ -1036,14 +1080,14 @@ class CaptionerUI:
             "whisper_vad": self.vad_var.get(),
         }
 
-        self.audio_queue = queue.Queue()
-        self.captions_input_queue = queue.Queue()
+        self.net_send_queue = queue.Queue()
+        self.net_recv_queue = queue.Queue()
         self.whisper_client = WhisperClient(
             server_url,
             port,
             params,
-            self.audio_queue,
-            self.captions_input_queue,
+            self.net_send_queue,
+            self.net_recv_queue,
             self.whisper_client_callback
         )
         self.whisper_client.start()
@@ -1055,12 +1099,25 @@ class CaptionerUI:
             logger.info("Stopping whisper client...")
             self.whisper_client.stop()
             self.whisper_client = None
-            self.audio_queue = None
-            self.captions_input_queue = None
+            self.net_send_queue = None
+            self.net_recv_queue = None
 
-    def run_captions_overlay(self):
-        self.captions_overlay = CaptionsReceiver(self.root_wnd, self.captions_input_queue, self.gui_queue)
-        self.captions_overlay.start()
+    def start_captions_overlay(self):
+        if not self.captions_overlay:
+            self.captions_overlay = CaptionsReceiver(
+                self.root_wnd, 
+                self.captions_font_size_var.get(), 
+                self.captions_max_visible_lines_var.get(),
+                self.net_recv_queue, 
+                self.gui_queue
+            )
+            self.captions_overlay.start()
+
+    def stop_captions_overlay(self):
+        if self.captions_overlay:
+            logger.info("Stopping captions overlay...")
+            self.captions_overlay.stop()
+            self.captions_overlay = None
 
     def create_audio_producer(self):
         audio_chunk_size = self.audio_chunk_size_var.get()
@@ -1092,7 +1149,7 @@ class CaptionerUI:
             self.audio_switcher = AudioSwitcher(
                 self.audio_temp_queue_1,
                 self.audio_temp_queue_2,
-                self.audio_queue,
+                self.net_send_queue,
                 int(self.audio_producer_2.min_chunk_size * WHISPER_SAMPLERATE)
             )
             self.audio_switcher.start()
@@ -1103,12 +1160,12 @@ class CaptionerUI:
             self.audio_producer = AudioStreamProducer(
                 audio_chunk_size,
                 self.selected_device_1_info,
-                self.audio_queue,
+                self.net_send_queue,
                 self.audio_producer_callback
             )
             self.audio_producer.start()
 
-    def stop_captioner(self):
+    def stop_audio_producers(self):
         if self.audio_producer:
             logger.info("Stopping audio producer...")
             self.audio_producer.stop()
@@ -1123,11 +1180,6 @@ class CaptionerUI:
             logger.info("Stopping audio switcher thread...")
             self.audio_switcher.stop()
             self.audio_switcher = None
-
-        if self.captions_overlay:
-            logger.info("Stopping captions overlay...")
-            self.captions_overlay.stop()
-            self.captions_overlay = None
 
         self.audio_temp_queue_1 = None
         self.audio_temp_queue_2 = None
@@ -1232,12 +1284,11 @@ class CaptionerUI:
         match event_type:
             case "stream_open":
                 def on_stream_open():
-                    if not self.zoom_url_var.get().strip():
-                        self.run_captions_overlay()
                     self.record_btn.config(text="Stop")
                     self.mute_btn.config(state="normal")
                     if self.use_second_audio_dev_var.get():
                         self.mute_btn_2.config(state="normal")
+                    self.show_captions_overlay_btn.config(state="normal")
                     self.is_recording = True
 
                 self.audio_producer_state_map[data["device_info"].index] = "open"
@@ -1250,6 +1301,7 @@ class CaptionerUI:
                     self.record_btn.config(text="Record")
                     self.mute_btn.config(state="disabled", text="🔊")
                     self.mute_btn_2.config(state="disabled", text="🔊")
+                    self.show_captions_overlay_btn.config(state="disabled", text="Show overlay")
                     self.is_recording = False
 
                 self.audio_producer_state_map[data["device_info"].index] = "closed"
@@ -1266,7 +1318,7 @@ class AudioStreamProducer:
         self,
         min_chunk_size: float,
         input_device_info: InputDeviceInfo,
-        result_queue: queue.Queue,
+        output_queue: queue.Queue,
         notif_callback: Callable[[str, dict], None]=None
     ):
         self.min_chunk_size = min_chunk_size
@@ -1282,7 +1334,7 @@ class AudioStreamProducer:
         self.stream = None
 
         self.audio_queue = queue.Queue()
-        self.result_queue = result_queue
+        self.output_queue = output_queue
 
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
 
@@ -1393,11 +1445,11 @@ class AudioStreamProducer:
                     if chunk is None or len(chunk) == 0:
                         continue
 
-                    self.result_queue.put(chunk)
+                    self.output_queue.put(chunk)
 
                 if self.input_device_info.resample_needed:
                     tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
-                    self.result_queue.put(tail)
+                    self.output_queue.put(tail)
                     self.resample_stream = None
         except Exception as e:
             logger.error(f"Audio stream error: {e}")
@@ -1593,14 +1645,14 @@ class WhisperClient:
             server_url: str,
             port: int,
             params: map,
-            audio_queue: queue.Queue,
-            output_queue: queue.Queue,
+            net_send_queue: queue.Queue,
+            net_recv_queue: queue.Queue,
             notif_callback: Callable[[str, dict], None]=None):
         self.server_url = server_url
         self.port = port
         self.params = params
-        self.audio_queue = audio_queue
-        self.output_queue = output_queue
+        self.net_send_queue = net_send_queue
+        self.net_recv_queue = net_recv_queue
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
         self.connected_event = threading.Event()
         self.results_thread = None
@@ -1616,7 +1668,7 @@ class WhisperClient:
     def stop(self):
         if self.is_running:
             self.is_running = False
-            self.audio_queue.put(None)
+            self.net_send_queue.put(None)
             self.whisper_client_thread.join()
             self.whisper_client_thread = None
 
@@ -1648,8 +1700,8 @@ class WhisperClient:
         # Step 3: stream audio
         try:
             while True:
-                chunk = self.audio_queue.get()
-                if chunk is None:
+                data = self.net_send_queue.get()
+                if data is None:
                     # Tell the server we're done, results thread should receive shutdown confirmation
                     netc.send_json(sock, {
                         "type": "control",
@@ -1659,7 +1711,10 @@ class WhisperClient:
                     self.notif_callback("disconnecting", {})
                     break
 
-                netc.send_ndarray(sock, chunk)
+                if type(data) == np.ndarray:
+                    netc.send_ndarray(sock, data)
+                else:
+                    netc.send_json(sock, data)
 
         except OSError as e:
             logger.error(f"Connection lost: {e}")
@@ -1696,7 +1751,7 @@ class WhisperClient:
             if msg_type == "translation":
                 text, complete = msg.get("text"), msg.get("complete")
                 if text and complete is not None:
-                    self.output_queue.put((text, complete))
+                    self.net_recv_queue.put((text, complete))
             elif msg_type == "statistics":
                 values = msg.get("values", {})
                 self.notif_callback("statistics", values)
@@ -1728,7 +1783,7 @@ class WhisperClient:
 
 
 class CaptionsReceiver:
-    def __init__(self, root_wnd, source_queue, gui_queue):
+    def __init__(self, root_wnd, font_size, max_visible_lines, source_queue, gui_queue):
         self.source_queue = source_queue
         self.gui_queue = gui_queue
         self.captions_thread = None
@@ -1738,7 +1793,8 @@ class CaptionsReceiver:
         self.overlay = captions_overlay.CaptionsOverlay(
             root=root_wnd,
             scroll_speed=400,
-            max_visible_lines=4
+            max_visible_lines=max_visible_lines,
+            font_size=font_size,
         )
 
     def start(self):

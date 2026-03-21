@@ -1,4 +1,6 @@
 import socket
+
+from pydot import Any
 import net_common as netc
 from urllib.parse import urlparse, parse_qs
 import multiprocessing as mp
@@ -390,7 +392,7 @@ class Translator:
             proc_start = time.perf_counter()
             transl_text = self.engine.translate_text(text[0])
             proc_end = time.perf_counter()
-            for out_q in self.output_queues:
+            for out_q in self.output_queues.copy():
                 out_q.put((transl_text, text[1]))
 
             self.sender_queue.put({
@@ -400,7 +402,7 @@ class Translator:
                 }
             })
         else:
-            for out_q in self.output_queues:
+            for out_q in self.output_queues.copy():
                  out_q.put(text)
 
     def start(self):
@@ -438,6 +440,13 @@ class Translator:
             except Exception as e:
                 logger.error(f"[Translator] Error initializing translation engine: {e}")
                 self.engine = None
+
+    def add_output_queue(self, q: queue.Queue):
+        self.output_queues.append(q)
+
+    def remove_output_queue(self, q: queue.Queue):
+        if q in self.output_queues:
+            self.output_queues.remove(q)
 
     def run(self):
         self.sender_queue.put({
@@ -594,7 +603,7 @@ class ZoomCaptionSender:
 
 ########## Caption sender: sends captions to the client
 
-class CaptionSender:
+class ClientCaptionSender:
     def __init__(self, source_queue: queue.Queue, sender_queue: mp.Queue, lang_code: str):
         self.source_queue = source_queue
         self.sender_queue = sender_queue
@@ -636,10 +645,9 @@ class CaptionSender:
 ########## WhisperPipeline
 
 class WhisperPipeline:
-    def __init__(self, client_params, sender_queue: mp.Queue):
+    def __init__(self, client_params: dict[str, Any], sender_queue: mp.Queue):
         self.audio_queue = MPCountingQueue()
         self.asr_queue = MPCountingQueue()
-        self.caption_sender_queue = queue.Queue()
         self.websrv_input_queue = queue.Queue()
         self.sender_queue = sender_queue
 
@@ -663,21 +671,22 @@ class WhisperPipeline:
             language,
             target_language,
             self.asr_queue,
-            [self.caption_sender_queue, self.websrv_input_queue],
+            [self.websrv_input_queue],
             sender_queue,
             only_complete_sent=bool(zoom_url)
         )
         self.translator.start()
 
-        logger.info("Starting Caption sender thread...")
-        capt_lang_code = get_lang_code(capt_lang)
+        self.capt_lang_code = get_lang_code(capt_lang)
+        self.zoom_caption_sender = None
+        self.zoom_caption_sender_queue = None
         if zoom_url:
-            zoom_url = zoom_url.strip()
-            self.caption_sender_queue.put(("...", True))  # to warm up Zoom
-            self.caption_sender = ZoomCaptionSender(self.caption_sender_queue, zoom_url, capt_lang_code)
-        else:
-            self.caption_sender = CaptionSender(self.caption_sender_queue, sender_queue, capt_lang_code)
-        self.caption_sender.start()
+            self.start_sending_zoom_transcript(zoom_url)
+
+        self.client_caption_sender = None
+        self.client_caption_sender_queue = None
+        if client_params.get("send_transcript"):
+            self.start_sending_client_transcript()
 
         logger.info("Starting transcript web server...")
         from web_server import WebTranscriptServer
@@ -698,29 +707,64 @@ class WhisperPipeline:
             }
         })
 
+    def start_sending_client_transcript(self):
+        if not self.client_caption_sender:
+            logger.info("Starting client caption sender thread...")
+            self.client_caption_sender_queue = queue.Queue()
+            self.client_caption_sender = ClientCaptionSender(self.client_caption_sender_queue, self.sender_queue, self.capt_lang_code)
+            self.client_caption_sender.start()
+            self.translator.add_output_queue(self.client_caption_sender_queue)
+
+    def stop_sending_client_transcript(self):
+        if self.client_caption_sender:
+            logger.info("Stopping client caption sender thread...")
+            if self.translator:
+                self.translator.remove_output_queue(self.client_caption_sender_queue)
+            self.client_caption_sender.stop()
+            self.client_caption_sender = None
+            self.client_caption_sender_queue = None
+
+    def start_sending_zoom_transcript(self, zoom_url):
+        if not self.zoom_caption_sender:
+            logger.info("Starting Zoom caption sender thread...")
+            zoom_url = zoom_url.strip()
+            self.zoom_caption_sender_queue = queue.Queue()
+            self.zoom_caption_sender_queue.put(("...", True))  # to warm up Zoom
+            self.zoom_caption_sender = ZoomCaptionSender(self.zoom_caption_sender_queue, zoom_url, self.capt_lang_code)
+            self.zoom_caption_sender.start()
+            self.translator.add_output_queue(self.zoom_caption_sender_queue)
+
+    def stop_sending_zoom_transcript(self):
+        if self.zoom_caption_sender:
+            logger.info("Stopping Zoom caption sender thread...")
+            if self.translator:
+                self.translator.remove_output_queue(self.zoom_caption_sender_queue)
+            self.zoom_caption_sender.stop()
+            self.zoom_caption_sender = None
+            self.zoom_caption_sender_queue = None
+
     def stop(self):
         logger.info("Stopping all threads...")
 
         logger.info("ASR thread exiting...")
         self.asr_proc.stop()
+        self.asr_proc = None
 
         logger.info("Translator thread exiting...")
         self.translator.stop()
+        self.translator = None
 
-        logger.info("Caption sender thread exiting...")
-        self.caption_sender.stop()
+        self.stop_sending_zoom_transcript()
+        self.stop_sending_client_transcript()
 
         logger.info("Web server thread exiting...")
         self.websrv.stop()
-
-        self.asr_proc = None
-        self.translator = None
-        self.caption_sender = None
         self.websrv = None
 
     def wait_until_ready(self):
-        for cmp in [self.translator, self.caption_sender, self.asr_proc]:
-            cmp.wait_until_ready()
+        for cmp in [self.translator, self.client_caption_sender, self.zoom_caption_sender, self.websrv, self.asr_proc]:
+            if cmp is not None:
+                cmp.wait_until_ready()
 
 
 class WhisperServer:
@@ -841,10 +885,15 @@ class WhisperServer:
                 elif msg_type == "json":
                     if msg.get("type") == "control":
                         command = msg.get("command")
-                        if command == "stop":
-                            logger.info("Client gracefully disconnecting.")
-                            clean_shutdown = True
-                            break
+                        match command:
+                            case "start_sending_client_transcript":
+                                pipeline.start_sending_client_transcript()
+                            case "stop_sending_client_transcript":
+                                pipeline.stop_sending_client_transcript()
+                            case "stop":
+                                logger.info("Client gracefully disconnecting.")
+                                clean_shutdown = True
+                                break
 
         except OSError as e:
             if not self.is_stopping:

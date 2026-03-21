@@ -105,6 +105,9 @@ class WebTranscriptServer:
         self._history.clear()
         self._stream_state = {"entry": {"last_complete": True, "counter": 0}}
 
+    def wait_until_ready(self):
+        return True
+
     def add_text(self, translation: str, original: str | None = None, complete: bool = True):
         """
         Add or update a transcript block.

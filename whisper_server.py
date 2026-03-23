@@ -329,9 +329,9 @@ class Translator:
             except Exception as e:
                 return f"[Translation Exception]: {e}."
 
-    def __init__(self, engine_id, engine_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
+    def __init__(self, engine_id, transl_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
         self.engine_id = engine_id
-        self.engine_params = engine_params
+        self.transl_params = transl_params
         self.engine = None
         self.src_lang = src_lang
         self.target_lang = target_lang
@@ -349,8 +349,7 @@ class Translator:
         self.nlp = spacy.blank(get_lang_code(self.src_lang))
         self.nlp.add_pipe("sentencizer")
 
-    FLUSH_TIMEOUT = 6  # seconds
-    SEND_INCREMENT_WORDS = 2  # Send partial text in increments of at least this many words.
+    FLUSH_TIMEOUT = 6  # Flush partial sentences after this many seconds.
 
     def _buffered_word_count(self):
         # Approximate word count by counting spaces. This is not exact but should be sufficient for statistics.
@@ -432,11 +431,11 @@ class Translator:
                     case Translator.Engine.MARIANMT:
                         self.engine = self.MarianMT(self.src_lang, self.target_lang)
                     case Translator.Engine.GOOGLE_GEMINI:
-                        self.engine = self.GoogleGemini(self.engine_params["api_key"], self.src_lang, self.target_lang)
+                        self.engine = self.GoogleGemini(self.transl_params["api_key"], self.src_lang, self.target_lang)
                     case Translator.Engine.NLLB:
                         self.engine = self.NLLB(self.src_lang, self.target_lang)
                     case Translator.Engine.EUROLLM:
-                        self.engine = self.EuroLLM(self.engine_params["api_key"], self.src_lang, self.target_lang)
+                        self.engine = self.EuroLLM(self.transl_params["api_key"], self.src_lang, self.target_lang)
             except Exception as e:
                 logger.error(f"[Translator] Error initializing translation engine: {e}")
                 self.engine = None
@@ -509,7 +508,8 @@ class Translator:
                         partial_words = self._word_count(text_to_transl)
                         if (
                             self.engine is None
-                            or partial_words - last_partial_words >= self.SEND_INCREMENT_WORDS
+                            # Send partial text in increments of at least this many words.
+                            or partial_words - last_partial_words >= self.transl_params["word_increment"]
                         ):
                             self.translate_and_send(to_translate)
                             last_partial_words = partial_words

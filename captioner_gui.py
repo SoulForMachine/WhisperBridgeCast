@@ -416,6 +416,15 @@ class CaptionerUI:
         self.transl_engine_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
+        self.transl_word_increment_var = tk.IntVar(value=2)
+        ttk.Label(translation_tab, text="Word increment").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_word_increment_slider = tk.Scale(translation_tab, from_=1, to=15, orient="horizontal", resolution=1, showvalue=False, variable=self.transl_word_increment_var,
+                                                     command=lambda val: self.transl_word_increment_label.config(text=f"{int(val)}"))
+        self.transl_word_increment_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.transl_word_increment_label = ttk.Label(translation_tab, text=f"{self.transl_word_increment_var.get()}", width=5, relief="flat", anchor="center")
+        self.transl_word_increment_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(translation_tab)
         translation_tab.grid_columnconfigure(2, weight=1)
         self.engine_params_frame = ttk.Frame(translation_tab, padding=10)
         self.engine_params_frame.grid(row=row_idx, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
@@ -983,6 +992,8 @@ class CaptionerUI:
             transl_params = { "api_key": self.transl_api_key_var.get().strip() }
         else:
             transl_params = {}
+
+        transl_params["word_increment"] = self.transl_word_increment_var.get()
 
         info_str = (
             f"Connecting to server at {server_url}:{port} with parameters:\n"

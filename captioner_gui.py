@@ -3,7 +3,7 @@ import socket
 import queue
 import threading
 import numpy as np
-import sounddevice as sd
+import pyaudiowpatch as pyaudio
 import tkinter as tk
 from tkinter import ttk, font
 import logging
@@ -33,7 +33,7 @@ class InputDeviceCaps:
         return f"InputDeviceCaps(channels={self.channels}, samplerate={self.samplerate}, min_latency={self.min_latency}, max_latency={self.max_latency}, index={self.index})"
 
 class InputDeviceInfo:
-    def __init__(self, name: str, api: str, caps: InputDeviceCaps):
+    def __init__(self, name: str, api: str, caps: InputDeviceCaps, is_loopback: bool = False):
         self.name = name
         self.api = api
         self.channels = caps.channels
@@ -41,46 +41,12 @@ class InputDeviceInfo:
         self.min_latency = caps.min_latency
         self.max_latency = caps.max_latency
         self.index = caps.index
+        self.is_loopback = is_loopback
 
-        self.downmix_needed, self.resample_needed = self.check_needed_processing()
-        self.target_channels = self.channels if self.downmix_needed else 1
-        self.target_samplerate = self.samplerate if self.resample_needed else WHISPER_SAMPLERATE
+        self.downmix_needed = self.channels > 1
+        self.resample_needed = self.samplerate != WHISPER_SAMPLERATE
 
         self.choose_safe_block_dur()
-
-    def check_input_settings(self, device, channels, samplerate):
-        settings = None
-        if self.api == "Windows WASAPI":
-            # For WASAPI, we want to allow other apps to access the mic, and to auto-convert to float32 if necessary.
-            settings = sd.WasapiSettings(exclusive=False, auto_convert=True)
-
-        try:
-            sd.check_input_settings(
-                device=device,
-                channels=channels,
-                samplerate=samplerate,
-                dtype="float32",
-                extra_settings=settings
-            )
-        except Exception:
-            return False
-        return True
-
-    def check_needed_processing(self):
-        # No processing needed if these settings are accepted
-        if self.check_input_settings(self.index, 1, WHISPER_SAMPLERATE):
-            return False, False
-
-        # Only downmix needed if 16kHz samplerate is accepted
-        if self.check_input_settings(self.index, self.channels, WHISPER_SAMPLERATE):
-            return True, False
-
-        # Only resample needed if mono is accepted
-        if self.check_input_settings(self.index, 1, self.samplerate):
-            return False, True
-
-        # Both downmix and resample needed
-        return True, True
 
     def choose_safe_block_dur(
         self,
@@ -120,7 +86,7 @@ class InputDeviceInfo:
         preferred = max(min_allowed, min(preferred, max_allowed)) # clamp to allowed range
 
         # Compute blocksize in frames
-        samplerate: int = int(self.target_samplerate)
+        samplerate: int = int(self.samplerate)
         blocksize = max(32, int(round(preferred * samplerate)))   # at least 32 frames
         preferred = blocksize / samplerate                        # adjust preferred to integer frames
 
@@ -131,7 +97,7 @@ class InputDeviceInfo:
 
     def set_block_dur(self, block_dur: float):
         self.block_dur = block_dur
-        self.block_size = int(round(self.block_dur * self.target_samplerate))
+        self.block_size = int(round(self.block_dur * self.samplerate))
 
 
 def sort_api_by_preference(api_list):
@@ -149,72 +115,46 @@ def sort_api_by_preference(api_list):
 
 
 def list_unique_input_devices():
-    # Outer dict: device_name -> hostapi_name -> InputDeviceCaps
+    # Outer dict: device_name -> hostapi_name -> (InputDeviceCaps, is_loopback)
     devices_dict = defaultdict(dict)
 
-    all_devices = sd.query_devices()
-    hostapis = sd.query_hostapis()
+    p = pyaudio.PyAudio()
 
-    input_devices = []
-    input_devices_mme = []
+    hostapis = []
+    for i in range(p.get_host_api_count()):
+        api = p.get_host_api_info_by_index(i)
+        hostapis.append(api['name'])
 
-    for dev in all_devices:
-        if dev['max_input_channels'] > 0:
-            hostapi_name = hostapis[dev['hostapi']]['name']
-            if hostapi_name == "MME":
-                input_devices_mme.append(dev)
-            else:
-                input_devices.append(dev)
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
 
-    # Convert to DeviceList
-    input_devices = sd.DeviceList(input_devices)
-    input_devices_mme = sd.DeviceList(input_devices_mme)
+        if dev['maxInputChannels'] > 0:
+            hostapi_name = hostapis[dev['hostApi']]
 
-    for dev in input_devices:
-        hostapi_name = hostapis[dev['hostapi']]['name']
+            is_loopback = dev.get('isLoopbackDevice', False)
 
-        devices_dict[dev['name']][hostapi_name] = InputDeviceCaps(
-            channels=dev['max_input_channels'],
-            samplerate=dev['default_samplerate'],
-            min_latency=dev['default_low_input_latency'],
-            max_latency=dev['default_high_input_latency'],
-            index=dev['index']
-        )
-
-    for dev in input_devices_mme:
-        # If we already saved a device whose name starts with this devices name,
-        # we assume that it is the same device - only with a cut-off name - and we
-        # just add device caps for MME API to the saved device's API map.
-        merged = False
-        for saved_name, saved_api_map in devices_dict.items():
-            if saved_name.startswith(dev['name']):
-                if not saved_api_map.get("MME"):
-                    saved_api_map["MME"] = InputDeviceCaps(
-                        channels=dev['max_input_channels'],
-                        samplerate=dev['default_samplerate'],
-                        min_latency=dev['default_low_input_latency'],
-                        max_latency=dev['default_high_input_latency'],
-                        index=dev['index']
-                    )
-                    merged = True
-                    break
-
-        if not merged:
-            devices_dict[dev['name']]["MME"] = InputDeviceCaps(
-                channels=dev['max_input_channels'],
-                samplerate=dev['default_samplerate'],
-                min_latency=dev['default_low_input_latency'],
-                max_latency=dev['default_high_input_latency'],
+            caps = InputDeviceCaps(
+                channels=int(dev['maxInputChannels']),
+                samplerate=dev['defaultSampleRate'],
+                min_latency=dev['defaultLowInputLatency'],
+                max_latency=dev['defaultHighInputLatency'],
                 index=dev['index']
             )
+
+            devices_dict[dev['name']][hostapi_name] = (caps, is_loopback)
+
+    p.terminate()
 
     return devices_dict
 
 
 def default_input_device(device_map):
-    def_dev_index = sd.default.device[0]
+    p = pyaudio.PyAudio()
+    def_dev_index = p.get_default_input_device_info()['index']
+    p.terminate()
+
     for name, api_map in device_map.items():
-        for api, caps in api_map.items():
+        for api, (caps, is_loopback) in api_map.items():
             if caps.index == def_dev_index:
                 return (name, api)
     return None
@@ -883,17 +823,18 @@ class CaptionerUI:
             f"Index: {dev_info.index}\n"
             f"Channels: {dev_info.channels}"
             + (
-                f" ({'software' if dev_info.downmix_needed else 'system'} downmix → {target_ch}ch)"
-                if dev_info.channels != target_ch else ""
+                f" (downmix → {target_ch}ch)"
+                if dev_info.downmix_needed else ""
             )
             + "\n"
             f"Samplerate: {int(dev_info.samplerate)} Hz"
             + (
-                f" ({'software' if dev_info.resample_needed else 'system'} resample → {target_sr / 1000:.0f} kHz)"
-                if dev_info.samplerate != target_sr else ""
+                f" (resample → {target_sr / 1000:.0f} kHz)" 
+                if dev_info.resample_needed else ""
             )
             + "\n"
-            f"Latency range: {dev_info.min_latency * 1000:.0f} – {dev_info.max_latency * 1000:.0f} ms"
+            f"Latency range: {dev_info.min_latency * 1000:.0f} – {dev_info.max_latency * 1000:.0f} ms\n"
+            f"Loopback: {'Yes' if dev_info.is_loopback else 'No'}"
         )
 
         return info_text
@@ -901,8 +842,8 @@ class CaptionerUI:
     def on_audio_device_host_api_1_selection_change(self, event):
         dev_name = self.audio_device_combo_1.get()
         host_api = self.audio_device_host_api_combo_1.get()
-        caps = self.device_map[dev_name][host_api]
-        dev_info = InputDeviceInfo(dev_name, host_api, caps)
+        caps, is_loopback = self.device_map[dev_name][host_api]
+        dev_info = InputDeviceInfo(dev_name, host_api, caps, is_loopback)
         self.selected_device_1_info = dev_info
 
         self.input_dev_info_label_1.config(text=self.format_device_info_text(dev_info))
@@ -927,8 +868,8 @@ class CaptionerUI:
     def on_audio_device_host_api_2_selection_change(self, event):
         dev_name = self.audio_device_combo_2.get()
         host_api = self.audio_device_host_api_combo_2.get()
-        caps = self.device_map[dev_name][host_api]
-        dev_info = InputDeviceInfo(dev_name, host_api, caps)
+        caps, is_loopback = self.device_map[dev_name][host_api]
+        dev_info = InputDeviceInfo(dev_name, host_api, caps, is_loopback)
         self.selected_device_2_info = dev_info
 
         self.input_dev_info_label_2.config(text=self.format_device_info_text(dev_info))
@@ -994,6 +935,7 @@ class CaptionerUI:
         self.net_server_status_label.config(text="disconnected")
         self.net_server_asr_in_queue_progress.config(value=0)
         self.net_server_asr_in_queue_label.config(text="chunks queued: --")
+        self.net_server_asr_vac_indicator.set_state("nonvoice")
         self.net_server_asr_proc_t_label.config(text="last: --")
         self.net_server_asr_proc_t_min_label.config(text="min: --")
         self.net_server_asr_proc_t_max_label.config(text="max: --")
@@ -1156,7 +1098,7 @@ class CaptionerUI:
         else:
             self.audio_producer_state_map[self.selected_device_1_info.index] = "closed"
 
-            # We use one device, puts the results directly to the audio_queue.
+            # We use one device, puts the results directly to the network send queue.
             self.audio_producer = AudioStreamProducer(
                 audio_chunk_size,
                 self.selected_device_1_info,
@@ -1322,15 +1264,9 @@ class AudioStreamProducer:
         notif_callback: Callable[[str, dict], None]=None
     ):
         self.min_chunk_size = min_chunk_size
-        self.input_device_info = input_device_info
-
-        self.device_channels = input_device_info.target_channels
-        self.device_rate = int(input_device_info.target_samplerate)
+        self.dev_info = input_device_info
 
         self.resample_stream = None
-
-        self.in_stream_block_dur = input_device_info.block_dur
-        self.blocksize = int(self.device_rate * self.in_stream_block_dur)
         self.stream = None
 
         self.audio_queue = queue.Queue()
@@ -1343,16 +1279,18 @@ class AudioStreamProducer:
         self.is_running = False
 
     def pause_stream(self):
-        if self.stream and self.stream.active:
-            self.stream.stop()
+        print(f"active: {self.stream.is_active()}, stopped: {self.stream.is_stopped()}")
+        if self.stream and self.stream.is_active():
+            self.stream.stop_stream()
 
     def resume_stream(self):
-        if self.stream and not self.stream.active:
-            self.stream.start()
+        print(f"active: {self.stream.is_active()}, stopped: {self.stream.is_stopped()}")
+        if self.stream and self.stream.is_stopped():
+            self.stream.start_stream()
 
     def is_paused(self):
         if self.stream:
-            return not self.stream.active
+            return not self.stream.is_active()
         return False
 
     def start(self):
@@ -1372,8 +1310,18 @@ class AudioStreamProducer:
             self.stream = None
 
     def downmix_mono(self, data: np.ndarray) -> np.ndarray:
-        # Convert multi-channel audio to mono by averaging channels
-        return data.mean(axis=1)
+        # Downmix by summing and normalizing.
+        # Ensure input is float32 (if it already is, this does nothing)
+        data = data.astype(np.float32, copy=False)
+
+        # Sum across channels
+        mono = np.empty(data.shape[0], dtype=np.float32)
+        np.add.reduce(data, axis=1, out=mono)
+
+        # Scale to preserve RMS volume
+        mono /= np.sqrt(data.shape[1])
+
+        return mono
 
     def resample_to_whisper(self, data: np.ndarray) -> np.ndarray:
         return self.resample_stream.resample_chunk(data)
@@ -1382,11 +1330,13 @@ class AudioStreamProducer:
         if status:
             logger.warning(f"Audio callback status: {status}")
 
-        self.audio_queue.put(indata.copy())
+        self.audio_queue.put(indata)
+
+        return (None, pyaudio.paContinue)
 
     def receive_audio_chunk(self):
         out = []
-        minlimit = int(self.min_chunk_size * self.device_rate)
+        minlimit = int(self.min_chunk_size * self.dev_info.samplerate)
         cur_size = 0
         while cur_size < minlimit:
             chunk = self.audio_queue.get()
@@ -1395,50 +1345,46 @@ class AudioStreamProducer:
             if chunk is None:
                 return None
 
-            out.append(chunk)
-            cur_size += len(chunk)
+            arr = np.frombuffer(chunk, dtype=np.float32).reshape(-1, self.dev_info.channels)
+            out.append(arr)
+            cur_size += len(arr)
 
         conc = np.concatenate(out)
 
-        mono = self.downmix_mono(conc) if self.input_device_info.downmix_needed else conc
-        mono16k = self.resample_to_whisper(mono) if self.input_device_info.resample_needed else mono
+        mono = self.downmix_mono(conc) if self.dev_info.downmix_needed else conc
+        mono16k = self.resample_to_whisper(mono) if self.dev_info.resample_needed else mono
 
         return mono16k
 
     def run(self):
         info_str = (
-            f"Listening to [{self.input_device_info.index}] {self.input_device_info.name}\n"
-            f"\t  API: {self.input_device_info.api}\n"
-            f"\t  Channels: {self.device_channels}\n"
-            f"\t  Samplerate: {self.device_rate}\n"
-            f"\t  Blocksize: {self.blocksize} frames (block duration: ~{self.in_stream_block_dur} s)"
+            f"Listening to [{self.dev_info.index}] {self.dev_info.name}\n"
+            f"\t  API: {self.dev_info.api}\n"
+            f"\t  Channels: {self.dev_info.channels}\n"
+            f"\t  Samplerate: {int(self.dev_info.samplerate)}\n"
+            f"\t  Blocksize: {self.dev_info.block_size} frames (block duration: ~{self.dev_info.block_dur} s)"
         )
         logger.info(info_str)
 
-        settings = None
-        if self.input_device_info.api == "Windows WASAPI":
-            import pythoncom
-            pythoncom.CoInitialize()
-
-            # For WASAPI, we want to allow other apps to access the mic, and to auto-convert to float32 if necessary.
-            settings = sd.WasapiSettings(exclusive=False, auto_convert=True)
+        p = pyaudio.PyAudio()
 
         try:
-            with sd.InputStream(
-                samplerate=self.device_rate,
-                channels=self.device_channels,
-                dtype="float32",
-                blocksize=self.blocksize,
-                callback=self.audio_callback,
-                device=self.input_device_info.index,
-                extra_settings=settings
+            with p.open(
+                format=pyaudio.paFloat32,
+                channels=self.dev_info.channels,
+                rate=int(self.dev_info.samplerate),
+                input=True,
+                input_device_index=self.dev_info.index,
+                frames_per_buffer=self.dev_info.block_size,
+                stream_callback=self.audio_callback
             ) as stream:
-                self.stream = stream
-                self.notif_callback("stream_open", {"device_info": self.input_device_info})
 
-                if self.input_device_info.resample_needed:
+                self.stream = stream
+                self.notif_callback("stream_open", {"device_info": self.dev_info})
+
+                if self.dev_info.resample_needed:
                     import soxr
-                    self.resample_stream = soxr.ResampleStream(self.device_rate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
+                    self.resample_stream = soxr.ResampleStream(self.dev_info.samplerate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
 
                 while not self.stop_event.is_set():
                     chunk = self.receive_audio_chunk()
@@ -1447,17 +1393,16 @@ class AudioStreamProducer:
 
                     self.output_queue.put(chunk)
 
-                if self.input_device_info.resample_needed:
+                if self.dev_info.resample_needed:
                     tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
                     self.output_queue.put(tail)
                     self.resample_stream = None
         except Exception as e:
             logger.error(f"Audio stream error: {e}")
-            self.notif_callback("stream_error", {"message": str(e), "device_info": self.input_device_info})
+            self.notif_callback("stream_error", {"message": str(e), "device_info": self.dev_info})
         finally:
-            self.notif_callback("stream_closed", {"device_info": self.input_device_info})
-            if self.input_device_info.api == "Windows WASAPI":
-                pythoncom.CoUninitialize()
+            p.terminate()
+            self.notif_callback("stream_closed", {"device_info": self.dev_info})
 
 
 class AudioSwitcher:

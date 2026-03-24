@@ -197,7 +197,7 @@ class Translator:
                 raise ValueError(f"MarianMT does not support translation from {src_lang} to {target_lang}.")
 
             self.tokenizer = MarianTokenizer.from_pretrained(model_name)
-            self.translator = MarianMTModel.from_pretrained(model_name)
+            self.translator = MarianMTModel.from_pretrained(model_name).to("cuda")
             self.target_lang_token = {
                 "Serbian Cyrillic": "srp_Cyrl",
                 "Serbian Latin": "srp_Latn",
@@ -205,7 +205,7 @@ class Translator:
 
         def translate_text(self, text: str) -> str:
             text_to_translate = f">>{self.target_lang_token}<< {text}" if self.target_lang_token else text
-            inputs = self.tokenizer(text_to_translate, return_tensors="pt", truncation=True)
+            inputs = self.tokenizer(text_to_translate, return_tensors="pt", truncation=True).to("cuda")
             translated = self.translator.generate(**inputs)
             transl_text = self.tokenizer.decode(translated[0], skip_special_tokens=True)
             return transl_text
@@ -1018,9 +1018,7 @@ def asr_subprocess_main(
         pass
 
     # Flush any remaining audio
-    result = whisper_online.asr_proc.finish()
-    if result and result[2]:
-        asr_queue.put(result[2])
+    whisper_online.asr_proc.finish()
 
 
 if __name__ == "__main__":

@@ -3,7 +3,10 @@ import socket
 import queue
 import threading
 import numpy as np
-import pyaudiowpatch as pyaudio
+if sys.platform == "win32":
+    import pyaudiowpatch as pyaudio
+else:
+    import pyaudio
 import tkinter as tk
 from tkinter import ttk, font
 import logging
@@ -1380,7 +1383,7 @@ class AudioStreamProducer:
         p = pyaudio.PyAudio()
 
         try:
-            with p.open(
+            stream = p.open(
                 format=pyaudio.paFloat32,
                 channels=self.dev_info.channels,
                 rate=int(self.dev_info.samplerate),
@@ -1388,30 +1391,32 @@ class AudioStreamProducer:
                 input_device_index=self.dev_info.index,
                 frames_per_buffer=self.dev_info.block_size,
                 stream_callback=self.audio_callback
-            ) as stream:
+            )
 
-                self.stream = stream
-                self.notif_callback("stream_open", {"device_info": self.dev_info})
+            self.stream = stream
+            self.notif_callback("stream_open", {"device_info": self.dev_info})
 
-                if self.dev_info.resample_needed:
-                    import soxr
-                    self.resample_stream = soxr.ResampleStream(self.dev_info.samplerate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
+            if self.dev_info.resample_needed:
+                import soxr
+                self.resample_stream = soxr.ResampleStream(self.dev_info.samplerate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
 
-                while not self.stop_event.is_set():
-                    chunk = self.receive_audio_chunk()
-                    if chunk is None or len(chunk) == 0:
-                        continue
+            while not self.stop_event.is_set():
+                chunk = self.receive_audio_chunk()
+                if chunk is None or len(chunk) == 0:
+                    continue
 
-                    self.output_queue.put(chunk)
+                self.output_queue.put(chunk)
 
-                if self.dev_info.resample_needed:
-                    tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
-                    self.output_queue.put(tail)
-                    self.resample_stream = None
+            if self.dev_info.resample_needed:
+                tail = self.resample_stream.resample_chunk(np.empty((0,), dtype=np.float32), last=True)
+                self.output_queue.put(tail)
+                self.resample_stream = None
         except Exception as e:
             logger.error(f"Audio stream error: {e}")
             self.notif_callback("stream_error", {"message": str(e), "device_info": self.dev_info})
         finally:
+            stream.stop_stream()
+            stream.close()
             p.terminate()
             self.notif_callback("stream_closed", {"device_info": self.dev_info})
 

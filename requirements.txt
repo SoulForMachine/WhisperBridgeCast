@@ -1,8 +1,12 @@
 numpy
 Requests
-pyaudiowpatch
+pyaudio; sys_platform != "win32"
+pyaudiowpatch; sys_platform == "win32"
+tkinter; sys_platform == "win32"
 soundfile
-tkinter
+pydot
+spacy
+soxr
 
 # Deep learning backend
 torch

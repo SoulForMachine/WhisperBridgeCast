@@ -353,7 +353,7 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vac_min_chunk_size_var = tk.DoubleVar(value=0.6)
+        self.vac_min_chunk_size_var = tk.DoubleVar(value=1.2)
         self.vac_min_chunk_size_slider = tk.Scale(whisper_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
                                                   command=lambda val: self.vac_min_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -526,7 +526,7 @@ class CaptionerUI:
         # === Common audio settings ===
         row_idx = self.next_row(audio_tab)
         ttk.Label(audio_tab, text="Audio chunk size (s)").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_chunk_size_var = tk.DoubleVar(value=0.6)
+        self.audio_chunk_size_var = tk.DoubleVar(value=1.2)
         self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.audio_chunk_size_var,
                                                   command=lambda val: self.audio_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)

@@ -1004,7 +1004,7 @@ def asr_subprocess_main(
                     }
                 })
 
-            if result and result[2]:
+            if result[2]:
                 asr_queue.put(result[2])
                 logger.info(f"[ASR] {result[2]}")
 

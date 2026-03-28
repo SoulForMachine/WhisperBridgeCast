@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import numpy as np
-import librosa
 from functools import lru_cache
 import time
 import logging
@@ -14,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(10**6)
 def load_audio(fname):
+    import librosa
     a, _ = librosa.load(fname, sr=16000, dtype=np.float32)
     return a
 
@@ -52,7 +52,7 @@ class ASRBase:
     def transcribe(self, audio, init_prompt=""):
         raise NotImplemented("must be implemented in the child class")
 
-    def use_vad(self):
+    def use_vad(self, params=None):
         raise NotImplemented("must be implemented in the child class")
 
 
@@ -91,13 +91,11 @@ class WhisperTimestampedASR(ASRBase):
     def segments_end_ts(self, res):
         return [s["end"] for s in res["segments"]]
 
-    def use_vad(self):
+    def use_vad(self, params=None):
         self.transcribe_kargs["vad"] = True
 
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
-
-
 
 
 class FasterWhisperASR(ASRBase):
@@ -108,7 +106,6 @@ class FasterWhisperASR(ASRBase):
 
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
         from faster_whisper import WhisperModel
-#        logging.getLogger("faster_whisper").setLevel(logger.level)
         if model_dir is not None:
             logger.debug(f"Loading whisper model from model_dir {model_dir}. modelsize and cache_dir parameters are not used.")
             model_size_or_path = model_dir
@@ -117,28 +114,27 @@ class FasterWhisperASR(ASRBase):
         else:
             raise ValueError("modelsize or model_dir parameter must be set")
 
-
-        # this worked fast and reliably on NVIDIA L40
         import torch
         device = self.device
         if device == "cuda" and not torch.cuda.is_available():
-            print("CUDA not available, using CPU", file=self.logfile, flush=True)
+            logger.info("CUDA not available, using CPU")
             device = "cpu"
         model = WhisperModel(model_size_or_path, device=device, compute_type=self.compute_type, download_root=cache_dir)
 
-        # or run on GPU with INT8
-        # tested: the transcripts were different, probably worse than with FP16, and it was slightly (appx 20%) slower
-        #model = WhisperModel(model_size, device="cuda", compute_type="int8_float16")
-
-        # or run on CPU with INT8
-        # tested: works, but slow, appx 10-times than cuda FP16
-#        model = WhisperModel(modelsize, device="cpu", compute_type="int8") #, download_root="faster-disk-cache-dir/")
         return model
 
     def transcribe(self, audio, init_prompt=""):
 
         # tested: beam_size=5 is faster and better than 1 (on one 200 second document from En ESIC, min chunk 0.01)
-        segments, info = self.model.transcribe(audio, language=self.original_language, initial_prompt=init_prompt, beam_size=5, word_timestamps=True, condition_on_previous_text=True, **self.transcribe_kargs)
+        segments, info = self.model.transcribe(
+            audio,
+            language=self.original_language,
+            initial_prompt=init_prompt,
+            beam_size=5,
+            word_timestamps=True,
+            condition_on_previous_text=True,
+            **self.transcribe_kargs
+        )
         #print(info)  # info contains language detection result
 
         return list(segments)
@@ -159,8 +155,9 @@ class FasterWhisperASR(ASRBase):
     def segments_end_ts(self, res):
         return [s.end for s in res]
 
-    def use_vad(self):
+    def use_vad(self, params=None):
         self.transcribe_kargs["vad_filter"] = True
+        self.transcribe_kargs["vad_parameters"] = params
 
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
@@ -271,8 +268,9 @@ class MLXWhisper(ASRBase):
     def segments_end_ts(self, res):
         return [s['end'] for s in res]
 
-    def use_vad(self):
+    def use_vad(self, params=None):
         self.transcribe_kargs["vad_filter"] = True
+        self.transcribe_kargs["vad_parameters"] = params
 
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
@@ -357,7 +355,7 @@ class OpenaiApiASR(ASRBase):
 
         return transcript
 
-    def use_vad(self):
+    def use_vad(self, params=None):
         self.use_vad_opt = True
 
     def set_translate_task(self):
@@ -513,7 +511,6 @@ class OnlineASRProcessor:
             if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:  # longer than this
                 self.chunk_completed_sentence()
 
-        
         if self.buffer_trimming_way == "segment":
             s = self.buffer_trimming_sec  # trim the completed segments longer than s,
         else:
@@ -529,7 +526,6 @@ class OnlineASRProcessor:
             #while k>0 and self.commited[k][1] > l:
             #    k -= 1
             #t = self.commited[k][1] 
-            logger.debug("chunking segment")
             #self.chunk_at(t)
 
         logger.debug(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}")
@@ -572,10 +568,6 @@ class OnlineASRProcessor:
         else:
             logger.debug(f"--- not enough segments to chunk")
 
-
-
-
-
     def chunk_at(self, time):
         """trims the hypothesis and audio buffer at "time"
         """
@@ -617,7 +609,7 @@ class OnlineASRProcessor:
         o = self.transcript_buffer.complete()
         f = self.to_flush(o)
         logger.debug(f"last, noncommited: {f}")
-        self.buffer_time_offset += len(self.audio_buffer)/16000
+        self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
         return f
 
 
@@ -723,7 +715,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
     def process_iter(self):
         if self.is_currently_final:
             return self.finish()
-        elif self.current_online_chunk_buffer_size > self.SAMPLING_RATE*self.online_chunk_size:
+        elif self.current_online_chunk_buffer_size >= self.SAMPLING_RATE*self.online_chunk_size:
             self.current_online_chunk_buffer_size = 0
             ret = self.online.process_iter()
             return ret
@@ -801,14 +793,29 @@ def asr_factory(args, logfile=sys.stderr):
             f"\t  task: {args.task}"
         )
         t = time.time()
-        asr = asr_cls(modelsize=size, lan=args.language, cache_dir=args.model_cache_dir, model_dir=args.model_dir, no_speech_prob_threshold=nsp_threshold, device=args.whisper_device, compute_type=args.whisper_compute_type)
+        asr = asr_cls(
+            modelsize=size,
+            lan=args.language,
+            cache_dir=args.model_cache_dir,
+            model_dir=args.model_dir,
+            no_speech_prob_threshold=nsp_threshold,
+            device=args.whisper_device,
+            compute_type=args.whisper_compute_type
+        )
         e = time.time()
         logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
     if getattr(args, 'whisper_vad', False):  # Checks if VAD argument is present and True
         logger.info("Setting VAD filter")
-        asr.use_vad()
+        asr.use_vad(dict(
+            threshold=args.vad_threshold,
+            neg_threshold=None,
+            min_speech_duration_ms=0,
+            max_speech_duration_s=float("inf"),
+            min_silence_duration_ms=args.vad_min_silence_duration_ms,
+            speech_pad_ms=args.vad_speech_pad_ms,
+        ))
 
     language = args.language
     if args.task == "translate":
@@ -825,9 +832,23 @@ def asr_factory(args, logfile=sys.stderr):
 
     # Create the OnlineASRProcessor
     if args.vac:
-        online = VACOnlineASRProcessor(args.vac_min_chunk_size, args.vad_threshold, args.vad_min_silence_duration_ms, args.vad_speech_pad_ms, asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+        online = VACOnlineASRProcessor(
+            args.vac_min_chunk_size,
+            args.vad_threshold,
+            args.vad_min_silence_duration_ms,
+            args.vad_speech_pad_ms,
+            asr,
+            tokenizer,
+            logfile=logfile,
+            buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec)
+        )
     else:
-        online = OnlineASRProcessor(asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
+        online = OnlineASRProcessor(
+            asr,
+            tokenizer,
+            logfile=logfile,
+            buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec)
+        )
 
     return asr, online
 

@@ -613,7 +613,7 @@ class CaptionerUI:
         self.net_server_asr_vac_indicator.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(stats_frame)
-        net_server_asr_proc_t_label = ttk.Label(stats_frame, text="Processing time:")
+        net_server_asr_proc_t_label = ttk.Label(stats_frame, text="Inference time:")
         net_server_asr_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_asr_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_asr_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
@@ -646,7 +646,7 @@ class CaptionerUI:
         self.net_server_transl_queue_label = ttk.Label(stats_frame, text="words buffered: --", width=20)
         self.net_server_transl_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
-        net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Processing time:")
+        net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Inference time:")
         net_server_transl_proc_t_label.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.net_server_transl_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_transl_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)

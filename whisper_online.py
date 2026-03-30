@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import string
 import sys
 import numpy as np
 from functools import lru_cache
@@ -124,7 +125,6 @@ class FasterWhisperASR(ASRBase):
         return model
 
     def transcribe(self, audio, init_prompt=""):
-
         # tested: beam_size=5 is faster and better than 1 (on one 200 second document from En ESIC, min chunk 0.01)
         segments, info = self.model.transcribe(
             audio,
@@ -135,7 +135,6 @@ class FasterWhisperASR(ASRBase):
             condition_on_previous_text=True,
             **self.transcribe_kargs
         )
-        #print(info)  # info contains language detection result
 
         return list(segments)
 
@@ -376,6 +375,9 @@ class HypothesisBuffer:
 
         self.logfile = logfile
 
+    def __repr__(self):
+        return f"commited_in_buf: {self.commited_in_buffer}  buf: {self.buffer}  new: {self.new}  last_com_t: {self.last_commited_time}  last_com_word: {self.last_commited_word}"
+
     def insert(self, new, offset):
         # compare self.commited_in_buffer and new. It inserts only the words in new that extend the commited_in_buffer, it means they are roughly behind last_commited_time and new in content
         # the new tail is added to self.new
@@ -434,6 +436,7 @@ class HypothesisBuffer:
 class OnlineASRProcessor:
 
     SAMPLING_RATE = 16000
+    EMPTY_SEG = (None, None, "")
 
     def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
         """asr: WhisperASR object
@@ -445,6 +448,7 @@ class OnlineASRProcessor:
         self.asr = asr
         self.tokenizer = tokenizer
         self.logfile = logfile
+        self.last_inference_time = 0.0
 
         self.init()
 
@@ -489,26 +493,23 @@ class OnlineASRProcessor:
         """
 
         prompt, non_prompt = self.prompt()
-        logger.debug(f"PROMPT: {prompt}")
-        logger.debug(f"CONTEXT: {non_prompt}")
-        logger.debug(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}")
+        # Transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}")
+        proc_start = time.perf_counter()
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
+        proc_end = time.perf_counter()
+        self.last_inference_time = proc_end - proc_start
 
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
-        o = self.transcript_buffer.flush()
-        self.commited.extend(o)
-        completed = self.to_flush(o)
-        logger.debug(f">>>>COMPLETE NOW: {completed}")
-        the_rest = self.to_flush(self.transcript_buffer.complete())
-        logger.debug(f"INCOMPLETE: {the_rest}")
+        out = self.transcript_buffer.flush()
+        self.commited.extend(out)
 
         # there is a newly confirmed text
 
-        if o and self.buffer_trimming_way == "sentence":  # trim the completed sentences
-            if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:  # longer than this
+        if out and self.buffer_trimming_way == "sentence":  # trim the completed sentences
+            if len(self.audio_buffer) / self.SAMPLING_RATE > self.buffer_trimming_sec:  # longer than this
                 self.chunk_completed_sentence()
 
         if self.buffer_trimming_way == "segment":
@@ -516,7 +517,7 @@ class OnlineASRProcessor:
         else:
             s = 30 # if the audio buffer is longer than 30s, trim it
         
-        if len(self.audio_buffer)/self.SAMPLING_RATE > s:
+        if len(self.audio_buffer) / self.SAMPLING_RATE > s:
             self.chunk_completed_segment(res)
 
             # alternative: on any word
@@ -529,7 +530,10 @@ class OnlineASRProcessor:
             #self.chunk_at(t)
 
         logger.debug(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}")
-        return self.to_flush(o)
+        confirmed = self.to_flush(out)
+        uc = self.to_flush(self.transcript_buffer.buffer)
+        unconfirmed = (uc[0], uc[1], uc[2].rstrip(string.punctuation))
+        return (confirmed, unconfirmed)
 
     def chunk_completed_sentence(self):
         if self.commited == []: return
@@ -610,7 +614,7 @@ class OnlineASRProcessor:
         f = self.to_flush(o)
         logger.debug(f"last, noncommited: {f}")
         self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
-        return f
+        return (f, self.EMPTY_SEG)
 
 
     def to_flush(self, sents, sep=None, offset=0, ):
@@ -627,6 +631,9 @@ class OnlineASRProcessor:
             b = offset + sents[0][0]
             e = offset + sents[-1][1]
         return (b,e,t)
+    
+    def get_last_inference_time(self):
+        return self.last_inference_time
 
 class VACOnlineASRProcessor(OnlineASRProcessor):
     '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller). 
@@ -714,20 +721,22 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
     def process_iter(self):
         if self.is_currently_final:
-            return self.finish()
-        elif self.current_online_chunk_buffer_size >= self.SAMPLING_RATE*self.online_chunk_size:
+            return self.finish() + ("flush",)
+        elif self.current_online_chunk_buffer_size >= self.SAMPLING_RATE * self.online_chunk_size:
             self.current_online_chunk_buffer_size = 0
             ret = self.online.process_iter()
-            return ret
+            return ret + ("inference",)
         else:
-            logger.debug(f"no online update, only VAD {self.status}")
-            return (None, None, "")
+            return (self.EMPTY_SEG, self.EMPTY_SEG, "vad_only")
 
     def finish(self):
         ret = self.online.finish()
         self.current_online_chunk_buffer_size = 0
         self.is_currently_final = False
         return ret
+
+    def get_last_inference_time(self):
+        return self.online.get_last_inference_time()
 
 
 

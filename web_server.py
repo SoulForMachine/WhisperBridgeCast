@@ -108,18 +108,17 @@ class WebTranscriptServer:
     def wait_until_ready(self):
         return True
 
-    def add_text(self, translation: str, original: str | None = None, complete: bool = True):
+    def add_text(self, message: dict):
         """
         Add or update a transcript block.
 
         - If complete=False, the last block is updated in place.
         - If complete=True, the block is finalized and the next call starts a new block.
+        - For original text, confirmed text is displayed normally and unconfirmed is grayed out.
         """
         self._broadcast_event(
             kind="entry",
-            original=original,
-            translation=translation,
-            complete=complete,
+            message=message,
         )
 
     # Internals ------------------------------------------------------------
@@ -130,23 +129,12 @@ class WebTranscriptServer:
                 break
 
             try:
-                # Accept either a dict or a tuple (translation, complete, original?).
                 if isinstance(item, dict):
-                    self.add_text(
-                        translation=item.get("translation", ""),
-                        original=item.get("original"),
-                        complete=bool(item.get("complete", True)),
-                    )
-                else:
-                    # Fallback tuple format: (translation, complete[, original])
-                    translation = item[0]
-                    complete = bool(item[1]) if len(item) > 1 else True
-                    original = item[2] if len(item) > 2 else None
-                    self.add_text(translation=translation, original=original, complete=complete)
+                    self.add_text(item)
             except Exception as e:
                 print(f"Invalid input queue item: {item} ({e})")
 
-    def _broadcast_event(self, kind: str, original: str | None, translation: str, complete: bool):
+    def _broadcast_event(self, kind: str, message: dict):
         with self._lock:
             state = self._stream_state[kind]
             if state["last_complete"]:
@@ -156,13 +144,16 @@ class WebTranscriptServer:
                 action = "replace"
 
             event_id = state["counter"]
-            state["last_complete"] = complete
+            state["last_complete"] = message.get("complete", True)
 
             event = {
                 "type": kind,
-                "original": original,
-                "translation": translation,
-                "complete": complete,
+                "original": message.get("orig_text"),
+                "unconfirmed": message.get("orig_unconfirmed_text"),
+                "translation": message.get("transl_text"),
+                "src_lang": message.get("src_lang"),
+                "target_lang": message.get("target_lang"),
+                "complete": message.get("complete", True),
                 "action": action,
                 "id": event_id,
                 "ts": time.time(),
@@ -354,6 +345,7 @@ class WebTranscriptServer:
     .pill.orig { background: rgba(34, 197, 94, 0.15); color: #bbf7d0; }
     .pill.transl { background: rgba(59, 130, 246, 0.15); color: #bfdbfe; }
     .content { white-space: pre-wrap; word-break: break-word; }
+    .content .unconfirmed { color: var(--muted); opacity: 0.7; }
     .muted { color: var(--muted); }
   </style>
 </head>
@@ -378,7 +370,7 @@ class WebTranscriptServer:
       return window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold;
     }
 
-    function renderEntry(action, original, translation) {
+    function renderEntry(action, original, unconfirmed, translation, src_lang, target_lang) {
       const stick = atBottom();
 
       let entry = null;
@@ -394,31 +386,46 @@ class WebTranscriptServer:
 
       entry.replaceChildren();
 
-      if (original) {
+      if (original || unconfirmed) {
         const rowOrig = document.createElement("div");
         rowOrig.className = "row";
         const pillO = document.createElement("span");
         pillO.className = "pill orig";
-        pillO.textContent = "Orig";
+        pillO.textContent = src_lang;
         rowOrig.appendChild(pillO);
         const bodyO = document.createElement("div");
         bodyO.className = "content";
-        bodyO.textContent = original;
+
+        if (original) {
+          const confirmedSpan = document.createElement("span");
+          confirmedSpan.textContent = original;
+          bodyO.appendChild(confirmedSpan);
+        }
+
+        if (unconfirmed) {
+          const unconfirmedSpan = document.createElement("span");
+          unconfirmedSpan.className = "unconfirmed";
+          unconfirmedSpan.textContent = unconfirmed;
+          bodyO.appendChild(unconfirmedSpan);
+        }
+
         rowOrig.appendChild(bodyO);
         entry.appendChild(rowOrig);
       }
 
-      const rowTrans = document.createElement("div");
-      rowTrans.className = "row";
-      const pillT = document.createElement("span");
-      pillT.className = "pill transl";
-      pillT.textContent = "Transl";
-      rowTrans.appendChild(pillT);
-      const bodyT = document.createElement("div");
-      bodyT.className = "content";
-      bodyT.textContent = translation;
-      rowTrans.appendChild(bodyT);
-      entry.appendChild(rowTrans);
+      if (translation) {
+        const rowTrans = document.createElement("div");
+        rowTrans.className = "row";
+        const pillT = document.createElement("span");
+        pillT.className = "pill transl";
+        pillT.textContent = target_lang;
+        rowTrans.appendChild(pillT);
+        const bodyT = document.createElement("div");
+        bodyT.className = "content";
+        bodyT.textContent = translation;
+        rowTrans.appendChild(bodyT);
+        entry.appendChild(rowTrans);
+      }
 
       if (stick) {
         window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
@@ -429,9 +436,9 @@ class WebTranscriptServer:
     es.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        const { type, original, translation, action } = payload;
+        const { type, original, unconfirmed, translation, action, src_lang, target_lang } = payload;
         if (type === "entry") {
-          renderEntry(action, original, translation);
+          renderEntry(action, original, unconfirmed, translation, src_lang, target_lang);
         }
       } catch (err) {
         console.error("Bad event", err);

@@ -40,9 +40,9 @@ def get_lang_code(lang: str) -> str:
         "German": "de",
         "Serbian": "sr",
         "Serbian Latin": "sr",
-        "Serbian Cyrilic": "sr",
+        "Serbian Cyrillic": "sr",
     }
-    return lang_code_map.get(lang, "en")
+    return lang_code_map.get(lang, "")
 
 class WhisperServerParams:
     def __init__(self):
@@ -335,18 +335,21 @@ class Translator:
         self.engine = None
         self.src_lang = src_lang
         self.target_lang = target_lang
+        self.src_lang_code = get_lang_code(src_lang)
+        self.target_lang_code = get_lang_code(target_lang)
         self.source_queue = source_queue
         self.output_queues = output_queues
         self.sender_queue = sender_queue
         self.only_complete_sent = only_complete_sent
         self.current_text = ""
+        self.unconfirmed_text = ""
 
         self.transl_thread = None
         self.is_running = False
         self.transl_ready_event = None
 
         import spacy
-        self.nlp = spacy.blank(get_lang_code(self.src_lang))
+        self.nlp = spacy.blank(self.src_lang_code)
         self.nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6  # Flush partial sentences after this many seconds.
@@ -366,33 +369,46 @@ class Translator:
             }
         })
 
-    def add_text(self, text: str):
+    def add_text(self, confirmed: str, unconfirmed: str):
         # Append new text to the current buffer.
-        if text != "":
-            self.current_text += text
+        self.current_text += confirmed
+        self.unconfirmed_text = unconfirmed
 
-    def get_sentences(self) -> list[tuple[str, bool]]:
+    def get_sentences(self) -> list[tuple[str, str, bool]]:
         doc = self.nlp(self.current_text)
-        sentences = [(sent.text.strip(), True) for sent in doc.sents]
+
+        def fix_sent(text):
+            text = text.strip()
+            text = text[:1].upper() + text[1:] if text else text
+            return text
+
+        sentences = [(fix_sent(sent.text), "", True) for sent in doc.sents]
+        added_unconfirmed = False
 
         if sentences:
             last_sent = sentences[-1][0]
-            if not last_sent.endswith(('.', '!', '?')):
+            if not last_sent.endswith(('.', '!', '?')) or '.' in last_sent[-4:-1]:
                 # last sentence is partial
-                sentences[-1] = (last_sent, False)
+                sentences[-1] = (last_sent, self.unconfirmed_text, False)
                 self.current_text = last_sent
+                added_unconfirmed = True
             else:
                 self.current_text = ""
+
+        if not added_unconfirmed and self.unconfirmed_text != "":
+            sentences.append(("", self.unconfirmed_text, False))
+
         return sentences
 
-    def translate_and_send(self, text: tuple[str, bool]):
+    def translate_and_send(self, text: tuple[str, str, bool]):
+        confirmed_text, unconfirmed_text, complete = text
+        transl_text = ""
+
         if self.engine is not None:
             import time
             proc_start = time.perf_counter()
-            transl_text = self.engine.translate_text(text[0])
+            transl_text = self.engine.translate_text(confirmed_text + unconfirmed_text)
             proc_end = time.perf_counter()
-            for out_q in self.output_queues.copy():
-                out_q.put((transl_text, text[1]))
 
             self.sender_queue.put({
                 "type": "statistics",
@@ -400,9 +416,16 @@ class Translator:
                     "last_transl_proc_time": proc_end - proc_start
                 }
             })
-        else:
-            for out_q in self.output_queues.copy():
-                 out_q.put(text)
+
+        for out_q in self.output_queues.copy():
+            out_q.put({
+                "src_lang": self.src_lang_code,
+                "orig_text": confirmed_text,
+                "orig_unconfirmed_text": unconfirmed_text,
+                "target_lang": self.target_lang_code,
+                "transl_text": transl_text,
+                "complete": complete,
+            })
 
     def start(self):
         if not self.is_running:
@@ -415,7 +438,7 @@ class Translator:
     def stop(self):
         if self.is_running:
             self.shutdown_event.set()
-            self.source_queue.put(None)
+            self.source_queue.put((None, None))
             self.transl_thread.join()
             self.transl_thread = None
             self.is_running = False
@@ -460,7 +483,6 @@ class Translator:
             "value": "translator_initialized"
         })
 
-        last_partial_words = 0
         self.transl_ready_event.set()
 
         while not self.shutdown_event.is_set():
@@ -468,51 +490,35 @@ class Translator:
             if self.source_queue.qsize() == 0:
                 try:
                     timeout = self.FLUSH_TIMEOUT if self.current_text != "" else None
-                    text = self.source_queue.get(timeout=timeout)
+                    confirmed, unconfirmed = self.source_queue.get(timeout=timeout)
                 except queue.Empty:
                     if self.current_text != "":
                         logger.info("[Translator] Timeout reached, flushing all current text.")
-                        self.translate_and_send((self.current_text + "...", True))
+                        self.translate_and_send((self.current_text + "...", "", True))
                         self.current_text = ""
-                        last_partial_words = 0
                         self._send_buffered_text_stats()
                     continue
 
-                if text is None:
+                if confirmed is None:
                     break
-                self.add_text(text)
+                self.add_text(confirmed, unconfirmed)
 
             # Get all available text from the queue.
             while self.source_queue.qsize() > 0:
                 try:
-                    text = self.source_queue.get(block=False)
+                    confirmed, unconfirmed = self.source_queue.get(block=False)
                 except queue.Empty:
                     break
 
-                if text is None:
+                if confirmed is None:
                     return
-                self.add_text(text)
+                self.add_text(confirmed, unconfirmed)
 
             sentences = self.get_sentences()
             self._send_buffered_text_stats()
 
             for to_translate in sentences:
-                text_to_transl = to_translate[0]
-                complete_sentence = to_translate[1]
-
-                if text_to_transl != "":
-                    if complete_sentence:
-                        self.translate_and_send(to_translate)
-                        last_partial_words = 0
-                    elif not self.only_complete_sent:
-                        partial_words = self._word_count(text_to_transl)
-                        if (
-                            self.engine is None
-                            # Send partial text in increments of at least this many words.
-                            or partial_words - last_partial_words >= self.transl_params["word_increment"]
-                        ):
-                            self.translate_and_send(to_translate)
-                            last_partial_words = partial_words
+                self.translate_and_send(to_translate)
 
     def wait_until_ready(self, timeout: float = None) -> bool:
         return self.transl_ready_event.wait(timeout=timeout)
@@ -521,10 +527,9 @@ class Translator:
 ########## Zoom caption sender
 
 class ZoomCaptionSender:
-    def __init__(self, source_queue, zoom_url, lang_code):
+    def __init__(self, source_queue, zoom_url):
         self.source_queue = source_queue
         self.zoom_url = zoom_url
-        self.lang_code = lang_code
         self.caption_thread = None
         self.is_running = False
 
@@ -551,15 +556,19 @@ class ZoomCaptionSender:
 
     def run(self):
         while True:
-            text, complete = self.source_queue.get()
-            if text is None:
+            message = self.source_queue.get()
+            if message is None:
                 break
-            elif not text.strip():
+
+            text = message.get("transl_text", "")
+            complete = message.get("complete", True)
+            lang_code = message.get("target_lang", "")
+            if not text.strip():
                 continue
 
             if self.zoom_url and complete:
                 # Build URL with lang + sequence params
-                url = f"{self.zoom_url}&lang={self.lang_code}&seq={self.sequence}"
+                url = f"{self.zoom_url}&lang={lang_code}&seq={self.sequence}"
 
                 headers = {
                     "Content-Type": "plain/text",
@@ -604,10 +613,9 @@ class ZoomCaptionSender:
 ########## Caption sender: sends captions to the client
 
 class ClientCaptionSender:
-    def __init__(self, source_queue: queue.Queue, sender_queue: mp.Queue, lang_code: str):
+    def __init__(self, source_queue: queue.Queue, sender_queue: mp.Queue):
         self.source_queue = source_queue
         self.sender_queue = sender_queue
-        self.lang_code = lang_code
         self.caption_thread = None
         self.is_running = False
 
@@ -626,15 +634,19 @@ class ClientCaptionSender:
 
     def run(self):
         while True:
-            text, complete = self.source_queue.get()
-            if text is None:
+            message = self.source_queue.get()
+            if message is None:
                 break
-            elif not text.strip():
+
+            text = message.get("transl_text", "")
+            complete = message.get("complete", True)
+            lang_code = message.get("target_lang", "")
+            if not text.strip():
                 continue
 
             self.sender_queue.put({
                 "type": "translation",
-                "lang": self.lang_code,
+                "lang": lang_code,
                 "text": text,
                 "complete": complete,
             })
@@ -659,10 +671,8 @@ class WhisperPipeline:
 
         if client_params.get("enable_translation") is True:
             transl_engine = client_params.get("translation_engine", Translator.Engine.MARIANMT)
-            capt_lang = target_language
         else:
             transl_engine = "none"
-            capt_lang = language
 
         logger.info("Starting Translator thread...")
         self.translator = Translator(
@@ -677,7 +687,6 @@ class WhisperPipeline:
         )
         self.translator.start()
 
-        self.capt_lang_code = get_lang_code(capt_lang)
         self.zoom_caption_sender = None
         self.zoom_caption_sender_queue = None
         if zoom_url:
@@ -711,7 +720,7 @@ class WhisperPipeline:
         if not self.client_caption_sender:
             logger.info("Starting client caption sender thread...")
             self.client_caption_sender_queue = queue.Queue()
-            self.client_caption_sender = ClientCaptionSender(self.client_caption_sender_queue, self.sender_queue, self.capt_lang_code)
+            self.client_caption_sender = ClientCaptionSender(self.client_caption_sender_queue, self.sender_queue)
             self.client_caption_sender.start()
             self.translator.add_output_queue(self.client_caption_sender_queue)
 
@@ -730,7 +739,7 @@ class WhisperPipeline:
             zoom_url = zoom_url.strip()
             self.zoom_caption_sender_queue = queue.Queue()
             self.zoom_caption_sender_queue.put(("...", True))  # to warm up Zoom
-            self.zoom_caption_sender = ZoomCaptionSender(self.zoom_caption_sender_queue, zoom_url, self.capt_lang_code)
+            self.zoom_caption_sender = ZoomCaptionSender(self.zoom_caption_sender_queue, zoom_url)
             self.zoom_caption_sender.start()
             self.translator.add_output_queue(self.zoom_caption_sender_queue)
 
@@ -990,10 +999,8 @@ def asr_subprocess_main(
                 }
             })
 
-            proc_start = time.perf_counter()
             whisper_online.asr_proc.insert_audio_chunk(chunk)
-            result = whisper_online.asr_proc.process_iter()
-            proc_end = time.perf_counter()
+            confirmed, unconfirmed, action = whisper_online.asr_proc.process_iter()
 
             if has_vac and whisper_online.asr_proc.status != last_vac_status:
                 last_vac_status = whisper_online.asr_proc.status
@@ -1004,18 +1011,21 @@ def asr_subprocess_main(
                     }
                 })
 
-            if result[2]:
-                asr_queue.put(result[2])
-                logger.info(f"[ASR] {result[2]}")
+            if confirmed[2] or unconfirmed[2]:
+                asr_queue.put((confirmed[2], unconfirmed[2]))
+                logger.info(f"[ASR] {confirmed[2]} | {unconfirmed[2]}")
 
-                sender_queue.put({
-                    "type": "statistics",
-                    "values": {
-                        "last_asr_proc_time": proc_end - proc_start,
-                    }
-                })
-    except (KeyboardInterrupt, Exception):
+                if action == "inference":
+                    sender_queue.put({
+                        "type": "statistics",
+                        "values": {
+                            "last_asr_proc_time": whisper_online.asr_proc.get_last_inference_time(),
+                        }
+                    })
+    except KeyboardInterrupt:
         pass
+    except Exception as e:
+        logger.error(f"ASR subprocess exception: {e}")
 
     # Flush any remaining audio
     whisper_online.asr_proc.finish()

@@ -41,8 +41,8 @@ class WebTranscriptServer:
         self._input_queue_thread = None
         self._input_queue: queue.Queue | None = None
 
-        # Track whether the last item was finalized so we know when to append vs. replace.
-        self._stream_state = {"entry": {"last_complete": True, "counter": 0}}
+        # SSE event id must be monotonic for Last-Event-ID resuming.
+        self._event_counter = 0
 
         # Keep a small backlog so newcomers see recent lines.
         self._history: list[dict] = []
@@ -103,7 +103,7 @@ class WebTranscriptServer:
         self._server_thread = None
         self._shutdown.clear()
         self._history.clear()
-        self._stream_state = {"entry": {"last_complete": True, "counter": 0}}
+        self._event_counter = 0
 
     def wait_until_ready(self):
         return True
@@ -112,8 +112,7 @@ class WebTranscriptServer:
         """
         Add or update a transcript block.
 
-        - If complete=False, the last block is updated in place.
-        - If complete=True, the block is finalized and the next call starts a new block.
+        - Updates are correlated by message id.
         - For original text, confirmed text is displayed normally and unconfirmed is grayed out.
         """
         self._broadcast_event(
@@ -136,28 +135,29 @@ class WebTranscriptServer:
 
     def _broadcast_event(self, kind: str, message: dict):
         with self._lock:
-            state = self._stream_state[kind]
-            if state["last_complete"]:
-                state["counter"] += 1
-                action = "append"
-            else:
-                action = "replace"
-
-            event_id = state["counter"]
-            state["last_complete"] = message.get("complete", True)
+            self._event_counter += 1
+            event_id = self._event_counter
+            entry_id = message.get("id", event_id)
 
             event = {
                 "type": kind,
-                "original": message.get("orig_text"),
-                "unconfirmed": message.get("orig_unconfirmed_text"),
-                "translation": message.get("transl_text"),
-                "src_lang": message.get("src_lang"),
-                "target_lang": message.get("target_lang"),
+                "entry_id": entry_id,
                 "complete": message.get("complete", True),
-                "action": action,
                 "id": event_id,
                 "ts": time.time(),
             }
+
+        if "orig_text" in message:
+          event["original"] = message.get("orig_text")
+        if "orig_unconfirmed_text" in message:
+          event["unconfirmed"] = message.get("orig_unconfirmed_text")
+        if "src_lang" in message:
+          event["src_lang"] = message.get("src_lang")
+
+        if "transl_text" in message:
+          event["translation"] = message.get("transl_text")
+        if "target_lang" in message:
+          event["target_lang"] = message.get("target_lang")
 
         self._send_event(event)
 
@@ -370,61 +370,80 @@ class WebTranscriptServer:
       return window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold;
     }
 
-    function renderEntry(action, original, unconfirmed, translation, src_lang, target_lang) {
+    const entriesById = new Map();
+
+    function getOrCreateEntry(entryId) {
+      if (entriesById.has(entryId)) {
+        return entriesById.get(entryId);
+      }
+
+      const entry = document.createElement("div");
+      entry.className = "entry";
+      entry.dataset.entryId = String(entryId);
+      entriesBox.appendChild(entry);
+      entriesById.set(entryId, entry);
+      return entry;
+    }
+
+    function upsertRow(entry, kind, langCode, confirmedText, unconfirmedText) {
+      const rowClass = `${kind}-row`;
+      let row = entry.querySelector(`.${rowClass}`);
+
+      if (!(confirmedText || unconfirmedText)) {
+        if (row) {
+          row.remove();
+        }
+        return;
+      }
+
+      if (!row) {
+        row = document.createElement("div");
+        row.className = `row ${rowClass}`;
+
+        const pill = document.createElement("span");
+        pill.className = `pill ${kind === "orig" ? "orig" : "transl"}`;
+        row.appendChild(pill);
+
+        const body = document.createElement("div");
+        body.className = "content";
+        row.appendChild(body);
+
+        entry.appendChild(row);
+      }
+
+      const pill = row.querySelector(".pill");
+      const body = row.querySelector(".content");
+      pill.textContent = langCode || "";
+      body.replaceChildren();
+
+      if (confirmedText) {
+        const confirmedSpan = document.createElement("span");
+        confirmedSpan.textContent = confirmedText;
+        body.appendChild(confirmedSpan);
+      }
+
+      if (unconfirmedText) {
+        const unconfirmedSpan = document.createElement("span");
+        unconfirmedSpan.className = "unconfirmed";
+        unconfirmedSpan.textContent = unconfirmedText;
+        body.appendChild(unconfirmedSpan);
+      }
+    }
+
+    function renderEntry(payload) {
       const stick = atBottom();
+      const entry = getOrCreateEntry(payload.entry_id);
 
-      let entry = null;
-      if (action === "replace" && entriesBox.lastElementChild) {
-        entry = entriesBox.lastElementChild;
+      const hasOriginal = Object.prototype.hasOwnProperty.call(payload, "original") ||
+        Object.prototype.hasOwnProperty.call(payload, "unconfirmed");
+      const hasTranslation = Object.prototype.hasOwnProperty.call(payload, "translation");
+
+      if (hasOriginal) {
+        upsertRow(entry, "orig", payload.src_lang, payload.original, payload.unconfirmed);
       }
 
-      if (!entry) {
-        entry = document.createElement("div");
-        entry.className = "entry";
-        entriesBox.appendChild(entry);
-      }
-
-      entry.replaceChildren();
-
-      if (original || unconfirmed) {
-        const rowOrig = document.createElement("div");
-        rowOrig.className = "row";
-        const pillO = document.createElement("span");
-        pillO.className = "pill orig";
-        pillO.textContent = src_lang;
-        rowOrig.appendChild(pillO);
-        const bodyO = document.createElement("div");
-        bodyO.className = "content";
-
-        if (original) {
-          const confirmedSpan = document.createElement("span");
-          confirmedSpan.textContent = original;
-          bodyO.appendChild(confirmedSpan);
-        }
-
-        if (unconfirmed) {
-          const unconfirmedSpan = document.createElement("span");
-          unconfirmedSpan.className = "unconfirmed";
-          unconfirmedSpan.textContent = unconfirmed;
-          bodyO.appendChild(unconfirmedSpan);
-        }
-
-        rowOrig.appendChild(bodyO);
-        entry.appendChild(rowOrig);
-      }
-
-      if (translation) {
-        const rowTrans = document.createElement("div");
-        rowTrans.className = "row";
-        const pillT = document.createElement("span");
-        pillT.className = "pill transl";
-        pillT.textContent = target_lang;
-        rowTrans.appendChild(pillT);
-        const bodyT = document.createElement("div");
-        bodyT.className = "content";
-        bodyT.textContent = translation;
-        rowTrans.appendChild(bodyT);
-        entry.appendChild(rowTrans);
+      if (hasTranslation) {
+        upsertRow(entry, "transl", payload.target_lang, payload.translation, "");
       }
 
       if (stick) {
@@ -436,9 +455,8 @@ class WebTranscriptServer:
     es.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        const { type, original, unconfirmed, translation, action, src_lang, target_lang } = payload;
-        if (type === "entry") {
-          renderEntry(action, original, unconfirmed, translation, src_lang, target_lang);
+        if (payload.type === "entry") {
+          renderEntry(payload);
         }
       } catch (err) {
         console.error("Bad event", err);

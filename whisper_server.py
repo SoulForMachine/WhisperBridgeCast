@@ -344,9 +344,15 @@ class Translator:
         self.current_text = ""
         self.unconfirmed_text = ""
 
-        self.transl_thread = None
+        self.loop_thread = None
+        self.translation_thread = None
+        self.translation_queue = queue.Queue()
         self.is_running = False
         self.transl_ready_event = None
+        self.shutdown_event = None
+
+        self.next_text_id = 0
+        self.pending_partial_id = None
 
         import spacy
         self.nlp = spacy.blank(self.src_lang_code)
@@ -414,12 +420,54 @@ class Translator:
 
     def translate_and_send(self, text: tuple[str, str, bool]):
         confirmed_text, unconfirmed_text, complete = text
-        transl_text = ""
+        text_id = self._resolve_text_id(complete)
+
+        for out_q in self.output_queues.copy():
+            out_q.put({
+                "id": text_id,
+                "src_lang": self.src_lang_code,
+                "orig_text": confirmed_text,
+                "orig_unconfirmed_text": unconfirmed_text,
+                "complete": complete,
+            })
 
         if self.engine is not None:
-            import time
+            self.translation_queue.put({
+                "id": text_id,
+                "text": confirmed_text + unconfirmed_text,
+                "complete": complete,
+            })
+
+    def _next_id(self) -> int:
+        self.next_text_id += 1
+        return self.next_text_id
+
+    def _resolve_text_id(self, complete: bool) -> int:
+        if complete:
+            if self.pending_partial_id is not None:
+                text_id = self.pending_partial_id
+                self.pending_partial_id = None
+                return text_id
+            return self._next_id()
+
+        if self.pending_partial_id is None:
+            self.pending_partial_id = self._next_id()
+        return self.pending_partial_id
+
+    def translation_thread_main(self):
+        import time
+
+        while True:
+            job = self.translation_queue.get()
+            if job is None:
+                break
+
+            text = job.get("text", "")
+            if not text.strip():
+                continue
+
             proc_start = time.perf_counter()
-            transl_text = self.engine.translate_text(confirmed_text + unconfirmed_text)
+            transl_text = self.engine.translate_text(text)
             proc_end = time.perf_counter()
 
             self.sender_queue.put({
@@ -429,30 +477,34 @@ class Translator:
                 }
             })
 
-        for out_q in self.output_queues.copy():
-            out_q.put({
-                "src_lang": self.src_lang_code,
-                "orig_text": confirmed_text,
-                "orig_unconfirmed_text": unconfirmed_text,
-                "target_lang": self.target_lang_code,
-                "transl_text": transl_text,
-                "complete": complete,
-            })
+            for out_q in self.output_queues.copy():
+                out_q.put({
+                    "id": job["id"],
+                    "target_lang": self.target_lang_code,
+                    "transl_text": transl_text,
+                    "complete": job.get("complete", True),
+                })
 
     def start(self):
         if not self.is_running:
             self.transl_ready_event = threading.Event()
             self.shutdown_event = threading.Event()
-            self.transl_thread = threading.Thread(target=self.run)
-            self.transl_thread.start()
+            self.loop_thread = threading.Thread(target=self.run_thread_main)
+            self.loop_thread.start()
             self.is_running = True
 
     def stop(self):
         if self.is_running:
             self.shutdown_event.set()
             self.source_queue.put((None, None))
-            self.transl_thread.join()
-            self.transl_thread = None
+            self.loop_thread.join()
+
+            if self.translation_thread is not None:
+                self.translation_queue.put(None)
+                self.translation_thread.join()
+
+            self.loop_thread = None
+            self.translation_thread = None
             self.is_running = False
             self.transl_ready_event = None
             self.shutdown_event = None
@@ -482,13 +534,17 @@ class Translator:
         if q in self.output_queues:
             self.output_queues.remove(q)
 
-    def run(self):
+    def run_thread_main(self):
         self.sender_queue.put({
             "type": "status",
             "value": "translator_initializing"
         })
 
         self.initialize_engine()
+
+        if self.engine is not None:
+            self.translation_thread = threading.Thread(target=self.translation_thread_main)
+            self.translation_thread.start()
 
         self.sender_queue.put({
             "type": "status",
@@ -547,7 +603,7 @@ class ZoomCaptionSender:
 
     def stop(self):
         if self.is_running:
-            self.source_queue.put((None, None))
+            self.source_queue.put(None)
             self.caption_thread.join()
             self.caption_thread = None
             self.is_running = False
@@ -625,7 +681,7 @@ class ClientCaptionSender:
 
     def stop(self):
         if self.is_running:
-            self.source_queue.put((None, None))
+            self.source_queue.put(None)
             self.caption_thread.join()
             self.caption_thread = None
             self.is_running = False
@@ -1011,7 +1067,7 @@ def asr_subprocess_main(
 
             if confirmed[2] or unconfirmed[2]:
                 asr_queue.put((confirmed[2], unconfirmed[2]))
-                #logger.info(f"[ASR] {confirmed[2]} | {unconfirmed[2]}")
+                logger.info(f"[ASR] {confirmed[2]} | {unconfirmed[2]}")
 
                 if action == "inference":
                     sender_queue.put({

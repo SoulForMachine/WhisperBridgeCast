@@ -143,7 +143,12 @@ class FasterWhisperASR(ASRBase):
         for segment in segments:
             for word in segment.words:
                 if segment.no_speech_prob > self.no_speech_prob_threshold:
-                    print(f"Skipping word {word.word} ({self.no_speech_prob_threshold}) because it's in a no-speech segment")
+                    logger.info(
+                        f"Skipping word {word.word} "
+                        f"(no_speech_prob={segment.no_speech_prob} > "
+                        f"threshold={self.no_speech_prob_threshold}) "
+                        "because it's in a no-speech segment"
+                    )
                     continue
                 # not stripping the spaces -- should not be merged with them!
                 w = word.word
@@ -298,7 +303,6 @@ class OpenaiApiASR(ASRBase):
         self.client = OpenAI()
 
         self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
-        
 
     def ts_words(self, segments):
         no_speech_segments = []
@@ -313,11 +317,10 @@ class OpenaiApiASR(ASRBase):
             start = word.start
             end = word.end
             if any(s[0] <= start <= s[1] for s in no_speech_segments):
-                # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
+                logger.info(f"Skipping word {word.word} because it's in a no-speech segment")
                 continue
             o.append((start, end, word.word))
         return o
-
 
     def segments_end_ts(self, res):
         return [s.end for s in res.words]
@@ -361,39 +364,43 @@ class OpenaiApiASR(ASRBase):
         self.task = "translate"
 
 
-
-
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
-        self.commited_in_buffer = []
+        self.committed_in_buffer = []
         self.buffer = []
         self.new = []
 
-        self.last_commited_time = 0
-        self.last_commited_word = None
+        self.last_committed_time = 0
+        self.last_committed_word = None
 
         self.logfile = logfile
 
     def __repr__(self):
-        return f"commited_in_buf: {self.commited_in_buffer}  buf: {self.buffer}  new: {self.new}  last_com_t: {self.last_commited_time}  last_com_word: {self.last_commited_word}"
+        return (
+            f"committed_in_buf: {self.committed_in_buffer}  "
+            f"buf: {self.buffer}  "
+            f"new: {self.new}  "
+            f"last_com_t: {self.last_committed_time}  "
+            f"last_com_word: {self.last_committed_word}"
+        )
 
     def insert(self, new, offset):
-        # compare self.commited_in_buffer and new. It inserts only the words in new that extend the commited_in_buffer, it means they are roughly behind last_commited_time and new in content
-        # the new tail is added to self.new
-        
+        # compare self.committed_in_buffer and new. It inserts only the words in new that extend the committed_in_buffer,
+        # it means they are roughly behind last_committed_time and new in content the new tail is added to self.new
+
         new = [(a+offset,b+offset,t) for a,b,t in new]
-        self.new = [(a,b,t) for a,b,t in new if a > self.last_commited_time-0.1]
+        self.new = [(a,b,t) for a,b,t in new if a > self.last_committed_time-0.1]
 
         if len(self.new) >= 1:
             a,b,t = self.new[0]
-            if abs(a - self.last_commited_time) < 1:
-                if self.commited_in_buffer:
-                    # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
-                    cn = len(self.commited_in_buffer)
+            if abs(a - self.last_committed_time) < 1:
+                if self.committed_in_buffer:
+                    # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in committed and new. If they are, they're dropped.
+                    cn = len(self.committed_in_buffer)
                     nn = len(self.new)
                     for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum 
-                        c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
+                        c = " ".join([self.committed_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
                         if c == tail:
                             words = []
@@ -404,7 +411,7 @@ class HypothesisBuffer:
                             break
 
     def flush(self):
-        # returns commited chunk = the longest common prefix of 2 last inserts. 
+        # returns committed chunk = the longest common prefix of 2 last inserts. 
 
         commit = []
         while self.new:
@@ -415,20 +422,20 @@ class HypothesisBuffer:
 
             if nt == self.buffer[0][2]:
                 commit.append((na,nb,nt))
-                self.last_commited_word = nt
-                self.last_commited_time = nb
+                self.last_committed_word = nt
+                self.last_committed_time = nb
                 self.buffer.pop(0)
                 self.new.pop(0)
             else:
                 break
         self.buffer = self.new
         self.new = []
-        self.commited_in_buffer.extend(commit)
+        self.committed_in_buffer.extend(commit)
         return commit
 
-    def pop_commited(self, time):
-        while self.commited_in_buffer and self.commited_in_buffer[0][1] <= time:
-            self.commited_in_buffer.pop(0)
+    def pop_committed(self, time):
+        while self.committed_in_buffer and self.committed_in_buffer[0][1] <= time:
+            self.committed_in_buffer.pop(0)
 
     def complete(self):
         return self.buffer
@@ -461,21 +468,21 @@ class OnlineASRProcessor:
         self.buffer_time_offset = 0
         if offset is not None:
             self.buffer_time_offset = offset
-        self.transcript_buffer.last_commited_time = self.buffer_time_offset
-        self.commited = []
+        self.transcript_buffer.last_committed_time = self.buffer_time_offset
+        self.committed = []
 
     def insert_audio_chunk(self, audio):
         self.audio_buffer = np.append(self.audio_buffer, audio)
 
     def prompt(self):
-        """Returns a tuple: (prompt, context), where "prompt" is a 200-character suffix of commited text that is inside of the scrolled away part of audio buffer. 
-        "context" is the commited text that is inside the audio buffer. It is transcribed again and skipped. It is returned only for debugging and logging reasons.
+        """Returns a tuple: (prompt, context), where "prompt" is a 200-character suffix of committed text that is inside of the scrolled away part of audio buffer. 
+        "context" is the committed text that is inside the audio buffer. It is transcribed again and skipped. It is returned only for debugging and logging reasons.
         """
-        k = max(0,len(self.commited)-1)
-        while k > 0 and self.commited[k-1][1] > self.buffer_time_offset:
+        k = max(0,len(self.committed)-1)
+        while k > 0 and self.committed[k-1][1] > self.buffer_time_offset:
             k -= 1
 
-        p = self.commited[:k]
+        p = self.committed[:k]
         p = [t for _,_,t in p]
         prompt = []
         l = 0
@@ -483,7 +490,7 @@ class OnlineASRProcessor:
             x = p.pop(-1)
             l += len(x)+1
             prompt.append(x)
-        non_prompt = self.commited[k:]
+        non_prompt = self.committed[k:]
         return self.asr.sep.join(prompt[::-1]), self.asr.sep.join(t for _,_,t in non_prompt)
 
     def process_iter(self):
@@ -493,7 +500,7 @@ class OnlineASRProcessor:
         """
 
         prompt, non_prompt = self.prompt()
-        # Transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}")
+        # Transcribing len(self.audio_buffer)/self.SAMPLING_RATE seconds from self.buffer_time_offset
         proc_start = time.perf_counter()
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
         proc_end = time.perf_counter()
@@ -504,7 +511,7 @@ class OnlineASRProcessor:
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         out = self.transcript_buffer.flush()
-        self.commited.extend(out)
+        self.committed.extend(out)
 
         # there is a newly confirmed text
 
@@ -516,77 +523,56 @@ class OnlineASRProcessor:
             s = self.buffer_trimming_sec  # trim the completed segments longer than s,
         else:
             s = 30 # if the audio buffer is longer than 30s, trim it
-        
+
         if len(self.audio_buffer) / self.SAMPLING_RATE > s:
             self.chunk_completed_segment(res)
 
-            # alternative: on any word
-            #l = self.buffer_time_offset + len(self.audio_buffer)/self.SAMPLING_RATE - 10
-            # let's find commited word that is less
-            #k = len(self.commited)-1
-            #while k>0 and self.commited[k][1] > l:
-            #    k -= 1
-            #t = self.commited[k][1] 
-            #self.chunk_at(t)
-
-        logger.debug(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}")
         confirmed = self.to_flush(out)
         uc = self.to_flush(self.transcript_buffer.buffer)
         unconfirmed = (uc[0], uc[1], uc[2].rstrip(string.punctuation))
         return (confirmed, unconfirmed)
 
     def chunk_completed_sentence(self):
-        if self.commited == []: return
-        logger.debug(self.commited)
-        sents = self.words_to_sentences(self.commited)
-        for s in sents:
-            logger.debug(f"\t\tSENT: {s}")
+        if self.committed == []:
+            return
+
+        sents = self.words_to_sentences(self.committed)        
         if len(sents) < 2:
             return
-        while len(sents) > 2:
-            sents.pop(0)
+
         # we will continue with audio processing at this timestamp
         chunk_at = sents[-2][1]
-
-        logger.debug(f"--- sentence chunked at {chunk_at:2.2f}")
         self.chunk_at(chunk_at)
 
     def chunk_completed_segment(self, res):
-        if self.commited == []: return
+        if self.committed == []:
+            return
 
         ends = self.asr.segments_end_ts(res)
-
-        t = self.commited[-1][1]
+        last_committed_end_time = self.committed[-1][1]
 
         if len(ends) > 1:
-
             e = ends[-2]+self.buffer_time_offset
-            while len(ends) > 2 and e > t:
+            while len(ends) > 2 and e > last_committed_end_time:
                 ends.pop(-1)
                 e = ends[-2]+self.buffer_time_offset
-            if e <= t:
-                logger.debug(f"--- segment chunked at {e:2.2f}")
+            if e <= last_committed_end_time:
                 self.chunk_at(e)
-            else:
-                logger.debug(f"--- last segment not within commited area")
-        else:
-            logger.debug(f"--- not enough segments to chunk")
 
     def chunk_at(self, time):
         """trims the hypothesis and audio buffer at "time"
         """
-        self.transcript_buffer.pop_commited(time)
+        self.transcript_buffer.pop_committed(time)
         cut_seconds = time - self.buffer_time_offset
-        self.audio_buffer = self.audio_buffer[int(cut_seconds*self.SAMPLING_RATE):]
+        self.audio_buffer = self.audio_buffer[int(cut_seconds * self.SAMPLING_RATE):]
         self.buffer_time_offset = time
 
     def words_to_sentences(self, words):
         """Uses self.tokenizer for sentence segmentation of words.
         Returns: [(beg,end,"sentence 1"),...]
         """
-        
         cwords = [w for w in words]
-        t = " ".join(o[2] for o in cwords)
+        t = self.asr.sep.join(o[2] for o in cwords)
         s = self.tokenizer.split(t)
         out = []
         while s:
@@ -612,7 +598,7 @@ class OnlineASRProcessor:
         """
         o = self.transcript_buffer.complete()
         f = self.to_flush(o)
-        logger.debug(f"last, noncommited: {f}")
+        logger.debug(f"last, noncommitted: {f}")
         self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
         return (f, self.EMPTY_SEG)
 
@@ -747,30 +733,26 @@ def create_tokenizer(lan):
 
     assert lan in WHISPER_LANG_CODES, "language must be Whisper's supported lang code: " + " ".join(WHISPER_LANG_CODES)
 
-    if lan == "uk":
-        import tokenize_uk
-        class UkrainianTokenizer:
-            def split(self, text):
-                return tokenize_uk.tokenize_sents(text)
-        return UkrainianTokenizer()
+    import spacy
+    class SpacyTok:
+        def __init__(self):
+            nlp = self.get_nlp(lan)
+            nlp.add_pipe("sentencizer")
+            self.nlp = nlp
 
-    # supported by fast-mosestokenizer
-    if lan in "as bn ca cs de el en es et fi fr ga gu hi hu is it kn lt lv ml mni mr nl or pa pl pt ro ru sk sl sv ta te yue zh".split():
-        from mosestokenizer import MosesTokenizer
-        return MosesTokenizer(lan)
+        def get_nlp(self, lang_code: str) -> spacy.language.Language:
+            try:
+                from spacy.util import get_lang_class
+                get_lang_class(lang_code)
+                return spacy.blank(lang_code)
+            except ImportError:
+                return spacy.blank("xx")  # fallback
 
-    # the following languages are in Whisper, but not in wtpsplit:
-    if lan in "as ba bo br bs fo haw hr ht jw lb ln lo mi nn oc sa sd sn so su sw tk tl tt".split():
-        logger.debug(f"{lan} code is not supported by wtpsplit. Going to use None lang_code option.")
-        lan = None
-
-    from wtpsplit import WtP
-    # downloads the model from huggingface on the first use
-    wtp = WtP("wtp-canine-s-12l-no-adapters")
-    class WtPtok:
         def split(self, sent):
-            return wtp.split(sent, lang_code=lan)
-    return WtPtok()
+            doc = self.nlp(sent)
+            return [s.text for s in doc.sents]
+
+    return SpacyTok()
 
 def asr_factory(args, logfile=sys.stderr):
     """

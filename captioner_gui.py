@@ -345,6 +345,36 @@ class CaptionerUI:
         self.threshold_label = ttk.Label(whisper_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
         self.threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
+        # === Buffer trimming ===
+        row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="Buffer trimming").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.buffer_trimming_var = tk.StringVar(value="segment")
+        self.buffer_trimming_combo = ttk.Combobox(
+            whisper_tab,
+            textvariable=self.buffer_trimming_var,
+            values=["segment", "sentence"],
+            state="readonly"
+        )
+        self.buffer_trimming_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+
+        # === Buffer trimming time ===
+        row_idx = self.next_row(whisper_tab)
+        ttk.Label(whisper_tab, text="Buffer trimming time (s)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.buffer_trimming_sec_var = tk.DoubleVar(value=15.0)
+        self.buffer_trimming_sec_slider = tk.Scale(
+            whisper_tab,
+            from_=5.0,
+            to=30.0,
+            orient="horizontal",
+            resolution=0.5,
+            showvalue=False,
+            variable=self.buffer_trimming_sec_var,
+            command=lambda val: self.buffer_trimming_sec_label.config(text=f"{float(val):.1f}")
+        )
+        self.buffer_trimming_sec_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.buffer_trimming_sec_label = ttk.Label(whisper_tab, text=f"{self.buffer_trimming_sec_var.get():.1f}", width=5, relief="flat", anchor="center")
+        self.buffer_trimming_sec_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
         # === VAD/VAC ===
         row_idx = self.next_row(whisper_tab)
         self.vac_var = tk.BooleanVar(value=True)
@@ -976,6 +1006,8 @@ class CaptionerUI:
             return False
 
         threshold = self.threshold_var.get()
+        buffer_trimming = self.buffer_trimming_var.get()
+        buffer_trimming_sec = self.buffer_trimming_sec_var.get()
         vac_min_chunk_size = self.vac_min_chunk_size_var.get()
         vad_threshold = self.vad_threshold_var.get()
         vad_min_silence_duration = self.vad_min_silence_duration_var.get()
@@ -1008,6 +1040,8 @@ class CaptionerUI:
             f"\t  Enable translation: {self.enable_translation_var.get()}\n"
             f"\t  Target language: {self.target_lang_var.get()}\n"
             f"\t  Threshold: {self.threshold_var.get()}\n"
+            f"\t  Buffer trimming: {buffer_trimming}\n"
+            f"\t  Buffer trimming time: {buffer_trimming_sec} s\n"
             f"\t  VAC enabled: {self.vac_var.get()}\n"
             f"\t  VAC minimum chunk size: {vac_min_chunk_size}\n"
             f"\t  VAD threshold: {vad_threshold}\n"
@@ -1028,6 +1062,8 @@ class CaptionerUI:
             "translation_engine": transl_engine,
             "translation_params": transl_params,
             "nsp_threshold": threshold,
+            "buffer_trimming": buffer_trimming,
+            "buffer_trimming_sec": buffer_trimming_sec,
             "vac": self.vac_var.get(),
             "vac_min_chunk_size": vac_min_chunk_size,
             "vad_threshold": vad_threshold,

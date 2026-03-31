@@ -598,7 +598,8 @@ class OnlineASRProcessor:
         """
         o = self.transcript_buffer.complete()
         f = self.to_flush(o)
-        logger.debug(f"last, noncommitted: {f}")
+        if f[2] and not f[2].endswith(('.', '!', '?')):
+            f = (f[0], f[1], f[2] + "...")
         self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
         return (f, self.EMPTY_SEG)
 

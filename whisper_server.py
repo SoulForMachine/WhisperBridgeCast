@@ -385,9 +385,21 @@ class Translator:
         sentences = [(fix_sent(sent.text), "", True) for sent in doc.sents]
         added_unconfirmed = False
 
+        def is_sentence_complete(sent):
+            if not sent.endswith(('.', '!', '?')):
+                return False
+
+            next_piece = self.unconfirmed_text.lstrip()
+            if next_piece:
+                ch = next_piece[0]
+                if ch.islower() or ch.isdigit():
+                    return False
+
+            return True
+
         if sentences:
             last_sent = sentences[-1][0]
-            if not last_sent.endswith(('.', '!', '?')) or '.' in last_sent[-4:-1]:
+            if not is_sentence_complete(last_sent):
                 # last sentence is partial
                 sentences[-1] = (last_sent, self.unconfirmed_text, False)
                 self.current_text = last_sent
@@ -486,33 +498,19 @@ class Translator:
         self.transl_ready_event.set()
 
         while not self.shutdown_event.is_set():
-            # If the queue is empty, wait for new text with a timeout if there is buffered text, otherwise wait indefinitely.
-            if self.source_queue.qsize() == 0:
+            # Get all available text from the queue. Block until we receive the first message.
+            first_msg = True
+            while True:
                 try:
-                    timeout = self.FLUSH_TIMEOUT if self.current_text != "" else None
-                    confirmed, unconfirmed = self.source_queue.get(timeout=timeout)
-                except queue.Empty:
-                    if self.current_text != "":
-                        logger.info("[Translator] Timeout reached, flushing all current text.")
-                        self.translate_and_send((self.current_text + "...", "", True))
-                        self.current_text = ""
-                        self._send_buffered_text_stats()
-                    continue
-
-                if confirmed is None:
-                    break
-                self.add_text(confirmed, unconfirmed)
-
-            # Get all available text from the queue.
-            while self.source_queue.qsize() > 0:
-                try:
-                    confirmed, unconfirmed = self.source_queue.get(block=False)
+                    confirmed, unconfirmed = self.source_queue.get(block=first_msg)
                 except queue.Empty:
                     break
 
                 if confirmed is None:
                     return
+
                 self.add_text(confirmed, unconfirmed)
+                first_msg = False
 
             sentences = self.get_sentences()
             self._send_buffered_text_stats()
@@ -1013,7 +1011,7 @@ def asr_subprocess_main(
 
             if confirmed[2] or unconfirmed[2]:
                 asr_queue.put((confirmed[2], unconfirmed[2]))
-                logger.info(f"[ASR] {confirmed[2]} | {unconfirmed[2]}")
+                #logger.info(f"[ASR] {confirmed[2]} | {unconfirmed[2]}")
 
                 if action == "inference":
                     sender_queue.put({

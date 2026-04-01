@@ -389,6 +389,9 @@ class CaptionerUI:
         self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vac_min_chunk_size_label = ttk.Label(whisper_tab, text=f"{self.vac_min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
         self.vac_min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        self.vac_dynamic_chunk_size_var = tk.BooleanVar(value=True)
+        self.vac_dynamic_chunk_size_check = ttk.Checkbutton(whisper_tab, text="Dynamic", variable=self.vac_dynamic_chunk_size_var)
+        self.vac_dynamic_chunk_size_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_tab)
         ttk.Label(whisper_tab, text="VAD threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
@@ -712,13 +715,16 @@ class CaptionerUI:
         self.net_server_asr_proc_t_label = ttk.Label(stats_frame, text="last: --")
         self.net_server_asr_proc_t_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
         self.net_server_asr_proc_t_graph = GraphWidget(stats_frame, width=100, height=50, line_color="blue", border_color="black", bg_color="lightgray", max_points=30)
-        self.net_server_asr_proc_t_graph.grid(row=row_idx, column=2, rowspan=3, sticky="wn", padx=5, pady=5)
+        self.net_server_asr_proc_t_graph.grid(row=row_idx, column=2, rowspan=4, sticky="wn", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
         self.net_server_asr_proc_t_min_label = ttk.Label(stats_frame, text="min: --")
         self.net_server_asr_proc_t_min_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
         self.net_server_asr_proc_t_max_label = ttk.Label(stats_frame, text="max: --")
         self.net_server_asr_proc_t_max_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(stats_frame)
+        self.net_server_asr_proc_t_roll_avg_label = ttk.Label(stats_frame, text="roll avg.: --")
+        self.net_server_asr_proc_t_roll_avg_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(stats_frame)
         net_server_transl_label_frame = ttk.Frame(stats_frame)
@@ -1100,6 +1106,7 @@ class CaptionerUI:
         self.net_server_asr_proc_t_label.config(text="last: --")
         self.net_server_asr_proc_t_min_label.config(text="min: --")
         self.net_server_asr_proc_t_max_label.config(text="max: --")
+        self.net_server_asr_proc_t_roll_avg_label.config(text="roll avg.: --")
         self.net_server_asr_proc_t_graph.clear()
         self.net_server_transl_queue_progress.config(value=0)
         self.net_server_transl_queue_label.config(text="words buffered: --")
@@ -1128,6 +1135,7 @@ class CaptionerUI:
         buffer_trimming = self.buffer_trimming_var.get()
         buffer_trimming_sec = self.buffer_trimming_sec_var.get()
         vac_min_chunk_size = self.vac_min_chunk_size_var.get()
+        vac_dynamic_chunk_size = self.vac_dynamic_chunk_size_var.get()
         vad_threshold = self.vad_threshold_var.get()
         vad_min_silence_duration = self.vad_min_silence_duration_var.get()
         vad_speech_pad = self.vad_speech_pad_var.get()
@@ -1205,6 +1213,7 @@ class CaptionerUI:
             f"\t  Buffer trimming time: {buffer_trimming_sec} s\n"
             f"\t  VAC enabled: {self.vac_var.get()}\n"
             f"\t  VAC minimum chunk size: {vac_min_chunk_size}\n"
+            f"\t  VAC dynamic chunk size: {vac_dynamic_chunk_size}\n"
             f"\t  VAD threshold: {vad_threshold}\n"
             f"\t  VAD minimum silence duration: {vad_min_silence_duration} s\n"
             f"\t  VAD speech pad: {vad_speech_pad} s\n"
@@ -1227,6 +1236,7 @@ class CaptionerUI:
             "buffer_trimming_sec": buffer_trimming_sec,
             "vac": self.vac_var.get(),
             "vac_min_chunk_size": vac_min_chunk_size,
+            "vac_dynamic_chunk_size": vac_dynamic_chunk_size,
             "vad_threshold": vad_threshold,
             "vad_min_silence_duration_ms": int(vad_min_silence_duration * 1000),
             "vad_speech_pad_ms": int(vad_speech_pad * 1000),
@@ -1360,6 +1370,15 @@ class CaptionerUI:
                                 self.net_server_asr_proc_t_max_label.config(text=f"max: {self.stats.asr_proc_time_max:.3f} s")
                                 self.net_server_asr_proc_t_graph.add_value(stat_value)
                             self.gui_queue.put(upd_asr_proc_time)
+                        case "asr_roll_avg_proc_time":
+                            def upd_asr_roll_avg_proc_time(stat_value=stat_value):
+                                self.net_server_asr_proc_t_roll_avg_label.config(text=f"roll avg.: {stat_value:.3f} s")
+                            self.gui_queue.put(upd_asr_roll_avg_proc_time)
+
+                            new_chunk_size = max(0.5, min(3.0, stat_value))
+                            self.audio_producer.min_chunk_size = new_chunk_size
+                            if self.audio_producer_2:
+                                self.audio_producer_2.min_chunk_size = new_chunk_size
                         case "last_transl_proc_time":
                             def upd_transl_proc_time(stat_value=stat_value):
                                 self.net_server_transl_proc_t_label.config(text=f"last: {stat_value:.3f} s")

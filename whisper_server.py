@@ -49,9 +49,6 @@ class WhisperServerParams:
         # Zoom URL
         self.zoom_url = ""
 
-        # Audio processing
-        self.vac_min_chunk_size = 1.0
-
         # Whisper model
         self.model = 'large-v2'
         self.model_cache_dir = None
@@ -67,7 +64,9 @@ class WhisperServerParams:
         self.nsp_threshold = None
 
         # Voice activity detection
-        self.vac = False
+        self.vac = True
+        self.vac_min_chunk_size = 1.0
+        self.vac_dynamic_chunk_size = True
         self.vad_threshold = 0.5
         self.vad_min_silence_duration_ms = 1000
         self.vad_speech_pad_ms = 1000
@@ -1219,6 +1218,7 @@ def asr_subprocess_main(
                         "type": "statistics",
                         "values": {
                             "last_asr_proc_time": whisper_online.asr_proc.get_last_inference_time(),
+                            "asr_roll_avg_proc_time": whisper_online.asr_proc.get_roll_avg_inference_time(),
                         }
                     })
     except KeyboardInterrupt:

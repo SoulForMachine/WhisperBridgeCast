@@ -444,6 +444,7 @@ class OnlineASRProcessor:
 
     SAMPLING_RATE = 16000
     EMPTY_SEG = (None, None, "")
+    ROLL_AVG_SIZE = 10
 
     def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
         """asr: WhisperASR object
@@ -456,6 +457,8 @@ class OnlineASRProcessor:
         self.tokenizer = tokenizer
         self.logfile = logfile
         self.last_inference_time = 0.0
+        self.roll_avg_inference_time = 0.0
+        self.roll_avg_buffer = []
 
         self.init()
 
@@ -504,7 +507,8 @@ class OnlineASRProcessor:
         proc_start = time.perf_counter()
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
         proc_end = time.perf_counter()
-        self.last_inference_time = proc_end - proc_start
+
+        self._update_inference_time(proc_end - proc_start)
 
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
@@ -603,7 +607,6 @@ class OnlineASRProcessor:
         self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
         return (f, self.EMPTY_SEG)
 
-
     def to_flush(self, sents, sep=None, offset=0, ):
         # concatenates the timestamped words or sentences into one sequence that is flushed in one line
         # sents: [(beg1, end1, "sentence1"), ...] or [] if empty
@@ -622,6 +625,16 @@ class OnlineASRProcessor:
     def get_last_inference_time(self):
         return self.last_inference_time
 
+    def get_roll_avg_inference_time(self):
+        return self.roll_avg_inference_time
+
+    def _update_inference_time(self, new_time):
+        self.last_inference_time = new_time
+        self.roll_avg_buffer.append(new_time)
+        if len(self.roll_avg_buffer) > self.ROLL_AVG_SIZE:
+            self.roll_avg_buffer.pop(0)
+        self.roll_avg_inference_time = sum(self.roll_avg_buffer) / len(self.roll_avg_buffer)
+
 class VACOnlineASRProcessor(OnlineASRProcessor):
     '''Wraps OnlineASRProcessor with VAC (Voice Activity Controller). 
 
@@ -630,8 +643,9 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
     When it detects end of speech (non-voice for 500ms), it makes OnlineASRProcessor to end the utterance immediately.
     '''
 
-    def __init__(self, online_chunk_size, vad_threshold, vad_min_silence_duration_ms, vad_speech_pad_ms, *a, **kw):
+    def __init__(self, online_chunk_size, dynamic_chunk_size, vad_threshold, vad_min_silence_duration_ms, vad_speech_pad_ms, *a, **kw):
         self.online_chunk_size = online_chunk_size
+        self.dynamic_chunk_size = dynamic_chunk_size
 
         self.online = OnlineASRProcessor(*a, **kw)
 
@@ -712,6 +726,11 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         elif self.current_online_chunk_buffer_size >= self.SAMPLING_RATE * self.online_chunk_size:
             self.current_online_chunk_buffer_size = 0
             ret = self.online.process_iter()
+
+            if self.dynamic_chunk_size:
+                roll_avg_t = self.online.get_roll_avg_inference_time()
+                self.online_chunk_size = max(0.5, min(3.0, roll_avg_t))
+
             return ret + ("inference",)
         else:
             return (self.EMPTY_SEG, self.EMPTY_SEG, "vad_only")
@@ -724,6 +743,9 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
     def get_last_inference_time(self):
         return self.online.get_last_inference_time()
+    
+    def get_roll_avg_inference_time(self):
+        return self.online.get_roll_avg_inference_time()
 
 
 
@@ -826,6 +848,7 @@ def asr_factory(args, logfile=sys.stderr):
     if args.vac:
         online = VACOnlineASRProcessor(
             args.vac_min_chunk_size,
+            args.vac_dynamic_chunk_size,
             args.vad_threshold,
             args.vad_min_silence_duration_ms,
             args.vad_speech_pad_ms,

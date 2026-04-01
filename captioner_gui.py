@@ -439,14 +439,39 @@ class CaptionerUI:
         self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=target_langs, state="readonly")
         self.target_lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
-        self.transl_engines = ["MarianMT", "NLLB", "EuroLLM", "Whisper", "Google Gemini"]
+        self.transl_engines = ["MarianMT", "NLLB", "EuroLLM", "Whisper", "Google Gemini", "Online Translators"]
         self.transl_engines_with_params = ["EuroLLM", "Google Gemini"]
+        self.online_translators = [
+            "Google", "MyMemory", "DeepL", "Microsoft", "Libre", "ChatGpt",
+            "Baidu", "Papago", "QCRI", "Yandex"
+        ]
+        self.libre_mirrors = ["libretranslate.com", "translate.cutie.dating", "translate.fedilab.app"]
+        self.libre_mirror_key_required = {
+            "libretranslate.com": True,
+            "translate.cutie.dating": False,
+            "translate.fedilab.app": False,
+        }
+        self.online_provider_api_key_required = {"DeepL", "Microsoft", "ChatGpt", "QCRI", "Yandex"}
+        self.online_provider_api_secret_required = {"Baidu", "Papago"}
+        self.online_provider_client_id_required = {"Baidu", "Papago"}
+        self.online_provider_domain_required = {"QCRI"}
+        self.online_provider_region_supported = {"Microsoft"}
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Translation engine").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.transl_engine_var = tk.StringVar(value="MarianMT")
         self.transl_engine_combo = ttk.Combobox(translation_tab, textvariable=self.transl_engine_var, values=self.transl_engines, state="readonly")
         self.transl_engine_combo.bind("<<ComboboxSelected>>", self.on_transl_engine_selection_change)
         self.transl_engine_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.online_translator_var = tk.StringVar(value=self.online_translators[0])
+        self.online_translator_combo = ttk.Combobox(
+            translation_tab,
+            textvariable=self.online_translator_var,
+            values=self.online_translators,
+            state="readonly",
+            width=14,
+        )
+        self.online_translator_combo.bind("<<ComboboxSelected>>", self.on_online_translator_selection_change)
+        self.online_translator_combo.grid(row=row_idx, column=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
         self.transl_word_increment_var = tk.IntVar(value=2)
@@ -462,11 +487,50 @@ class CaptionerUI:
         self.engine_params_frame = ttk.Frame(translation_tab, padding=10)
         self.engine_params_frame.grid(row=row_idx, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.engine_params_frame.grid_columnconfigure(2, weight=1)
+
         row_idx = self.next_row(self.engine_params_frame)
-        ttk.Label(self.engine_params_frame, text="API Key").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_api_key_label = ttk.Label(self.engine_params_frame, text="API Key")
+        self.transl_api_key_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.transl_api_key_var = tk.StringVar(value="")
         self.transl_api_key_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_key_var)
         self.transl_api_key_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(self.engine_params_frame)
+        self.transl_api_secret_label = ttk.Label(self.engine_params_frame, text="API Secret")
+        self.transl_api_secret_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_api_secret_var = tk.StringVar(value="")
+        self.transl_api_secret_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_secret_var)
+        self.transl_api_secret_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(self.engine_params_frame)
+        self.transl_client_id_label = ttk.Label(self.engine_params_frame, text="Client/App ID")
+        self.transl_client_id_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_client_id_var = tk.StringVar(value="")
+        self.transl_client_id_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_client_id_var)
+        self.transl_client_id_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(self.engine_params_frame)
+        self.transl_region_label = ttk.Label(self.engine_params_frame, text="Region")
+        self.transl_region_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_region_var = tk.StringVar(value="")
+        self.transl_region_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_region_var)
+        self.transl_region_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(self.engine_params_frame)
+        self.transl_domain_label = ttk.Label(self.engine_params_frame, text="Domain")
+        self.transl_domain_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.transl_domain_var = tk.StringVar(value="general")
+        self.transl_domain_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_domain_var)
+        self.transl_domain_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+
+        row_idx = self.next_row(self.engine_params_frame)
+        self.libre_mirror_label = ttk.Label(self.engine_params_frame, text="Libre mirror")
+        self.libre_mirror_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.libre_mirror_var = tk.StringVar(value=self.libre_mirrors[0])
+        self.libre_mirror_combo = ttk.Combobox(self.engine_params_frame, textvariable=self.libre_mirror_var, values=self.libre_mirrors, state="readonly")
+        self.libre_mirror_combo.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.libre_mirror_combo.bind("<<ComboboxSelected>>", self.on_online_translator_selection_change)
+
         self.transl_engine_combo.event_generate("<<ComboboxSelected>>")
 
         # +++ Audio tab +++
@@ -812,27 +876,83 @@ class CaptionerUI:
         if self.enable_translation_var.get():
             self.target_lang_combo.config(state="readonly")
             self.transl_engine_combo.config(state="readonly")
-            for w in self.engine_params_frame.winfo_children():
-                w.config(state="normal")
+            self.on_transl_engine_selection_change(None)
         else:
             self.target_lang_combo.config(state="disabled")
             self.transl_engine_combo.config(state="disabled")
+            self.online_translator_combo.config(state="disabled")
             for w in self.engine_params_frame.winfo_children():
                 w.config(state="disabled")
 
+    def _set_param_row_visible(self, label_widget, input_widget, visible: bool):
+        if visible:
+            label_widget.grid()
+            input_widget.grid()
+        else:
+            label_widget.grid_remove()
+            input_widget.grid_remove()
+
+    def _set_param_row_state(self, input_widget, state: str):
+        if isinstance(input_widget, ttk.Combobox):
+            input_widget.config(state="readonly" if state == "normal" else "disabled")
+        else:
+            input_widget.config(state=state)
+
     def on_transl_engine_selection_change(self, event):
         transl_model = self.transl_engine_var.get()
-        if transl_model in self.transl_engines_with_params:
+        uses_online_translator = transl_model == "Online Translators"
+        provider = self.online_translator_var.get()
+
+        if uses_online_translator:
+            self.online_translator_combo.grid()
+            if self.enable_translation_var.get():
+                self.online_translator_combo.config(state="readonly")
+        else:
+            self.online_translator_combo.grid_remove()
+
+        needs_api_key = transl_model in self.transl_engines_with_params
+        if uses_online_translator:
+            needs_api_key = (
+                provider in self.online_provider_api_key_required
+                or (provider == "Libre" and self.libre_mirror_key_required.get(self.libre_mirror_var.get(), False))
+            )
+
+        needs_api_secret = uses_online_translator and provider in self.online_provider_api_secret_required
+        needs_client_id = uses_online_translator and provider in self.online_provider_client_id_required
+        needs_domain = uses_online_translator and provider in self.online_provider_domain_required
+        needs_region = uses_online_translator and provider in self.online_provider_region_supported
+        needs_libre_mirror = uses_online_translator and provider == "Libre"
+
+        self._set_param_row_visible(self.transl_api_key_label, self.transl_api_key_entry, needs_api_key)
+        self._set_param_row_visible(self.transl_api_secret_label, self.transl_api_secret_entry, needs_api_secret)
+        self._set_param_row_visible(self.transl_client_id_label, self.transl_client_id_entry, needs_client_id)
+        self._set_param_row_visible(self.transl_domain_label, self.transl_domain_entry, needs_domain)
+        self._set_param_row_visible(self.transl_region_label, self.transl_region_entry, needs_region)
+        self._set_param_row_visible(self.libre_mirror_label, self.libre_mirror_combo, needs_libre_mirror)
+
+        has_any_params = any([
+            needs_api_key,
+            needs_api_secret,
+            needs_client_id,
+            needs_domain,
+            needs_region,
+            needs_libre_mirror,
+        ])
+
+        if has_any_params:
             self.engine_params_frame.grid()
+            api_state = "normal" if self.enable_translation_var.get() else "disabled"
+            self._set_param_row_state(self.transl_api_key_entry, api_state)
+            self._set_param_row_state(self.transl_api_secret_entry, api_state)
+            self._set_param_row_state(self.transl_client_id_entry, api_state)
+            self._set_param_row_state(self.transl_domain_entry, api_state)
+            self._set_param_row_state(self.transl_region_entry, api_state)
+            self._set_param_row_state(self.libre_mirror_combo, api_state)
         else:
             self.engine_params_frame.grid_remove()
 
-        if transl_model == "Google Gemini":
-            self.transl_api_key_var.set("")
-        elif transl_model == "EuroLLM":
-            self.transl_api_key_var.set("")
-        else:
-            self.transl_api_key_var.set("")
+    def on_online_translator_selection_change(self, event):
+        self.on_transl_engine_selection_change(None)
 
     def on_enable_second_audio_device(self):
         if self.use_second_audio_dev_var.get():
@@ -862,7 +982,7 @@ class CaptionerUI:
         target_sr = WHISPER_SAMPLERATE
 
         info_text = (
-            f"Index: {dev_info.index}\n"
+            f"Index: {dev_info.index}  |  Type: {'loopback' if dev_info.is_loopback else 'input'}\n"
             f"Channels: {dev_info.channels}"
             + (
                 f" (downmix → {target_ch}ch)"
@@ -875,8 +995,7 @@ class CaptionerUI:
                 if dev_info.resample_needed else ""
             )
             + "\n"
-            f"Latency range: {dev_info.min_latency * 1000:.0f} – {dev_info.max_latency * 1000:.0f} ms\n"
-            f"Loopback: {'Yes' if dev_info.is_loopback else 'No'}"
+            f"Latency range: {dev_info.min_latency * 1000:.0f} – {dev_info.max_latency * 1000:.0f} ms"
         )
 
         return info_text
@@ -1023,10 +1142,50 @@ class CaptionerUI:
             return False
 
         transl_engine = self.transl_engine_var.get()
+        transl_params = {}
+
         if transl_engine in self.transl_engines_with_params:
-            transl_params = { "api_key": self.transl_api_key_var.get().strip() }
-        else:
-            transl_params = {}
+            transl_params["api_key"] = self.transl_api_key_var.get().strip()
+
+        provider = ""
+        if transl_engine == "Online Translators":
+            provider = self.online_translator_var.get()
+            transl_params["provider"] = provider
+            transl_params["api_key"] = self.transl_api_key_var.get().strip()
+            transl_params["api_secret"] = self.transl_api_secret_var.get().strip()
+            transl_params["client_id"] = self.transl_client_id_var.get().strip()
+            transl_params["domain"] = self.transl_domain_var.get().strip()
+            transl_params["region"] = self.transl_region_var.get().strip()
+            transl_params["libre_mirror"] = self.libre_mirror_var.get().strip() or self.libre_mirrors[0]
+
+        if self.enable_translation_var.get():
+            needs_key = transl_engine in self.transl_engines_with_params
+            needs_secret = False
+            needs_client_id = False
+            needs_domain = False
+
+            if transl_engine == "Online Translators":
+                provider = self.online_translator_var.get()
+                needs_key = (
+                    provider in self.online_provider_api_key_required
+                    or (provider == "Libre" and self.libre_mirror_key_required.get(self.libre_mirror_var.get(), False))
+                )
+                needs_secret = provider in self.online_provider_api_secret_required
+                needs_client_id = provider in self.online_provider_client_id_required
+                needs_domain = provider in self.online_provider_domain_required
+
+            if needs_key and not transl_params.get("api_key"):
+                logger.error("Translation backend requires API key, but the API key field is empty.")
+                return False
+            if needs_secret and not transl_params.get("api_secret"):
+                logger.error("Translation backend requires API secret, but the API secret field is empty.")
+                return False
+            if needs_client_id and not transl_params.get("client_id"):
+                logger.error("Translation backend requires Client/App ID, but the field is empty.")
+                return False
+            if needs_domain and not transl_params.get("domain"):
+                logger.error("QCRI translator requires a domain, but the Domain field is empty.")
+                return False
 
         transl_params["word_increment"] = self.transl_word_increment_var.get()
 
@@ -1039,6 +1198,8 @@ class CaptionerUI:
             f"\t  Language: {self.lang_var.get()}\n"
             f"\t  Enable translation: {self.enable_translation_var.get()}\n"
             f"\t  Target language: {self.target_lang_var.get()}\n"
+            f"\t  Translation engine: {transl_engine}\n"
+            f"\t  Online translator: {provider if provider else '<none>'}\n"
             f"\t  Threshold: {self.threshold_var.get()}\n"
             f"\t  Buffer trimming: {buffer_trimming}\n"
             f"\t  Buffer trimming time: {buffer_trimming_sec} s\n"

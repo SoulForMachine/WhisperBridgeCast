@@ -181,6 +181,28 @@ class Translator:
         NLLB = "NLLB"
         EUROLLM = "EuroLLM"
         GOOGLE_GEMINI = "Google Gemini"
+        ONLINE_TRANSLATORS = "Online Translators"
+
+    class OnlineProviders:
+        GOOGLE = "Google"
+        MYMEMORY = "MyMemory"
+        DEEPL = "DeepL"
+        MICROSOFT = "Microsoft"
+        LIBRE = "Libre"
+        CHATGPT = "ChatGpt"
+        BAIDU = "Baidu"
+        PAPAGO = "Papago"
+        QCRI = "QCRI"
+        YANDEX = "Yandex"
+
+        API_KEY_REQUIRED = {DEEPL, MICROSOFT, CHATGPT, QCRI, YANDEX}
+
+    LIBRE_MIRRORS = {
+        "libretranslate.com": {
+            "url": "https://libretranslate.com/",
+            "api_key_required": True,
+        },
+    }
 
     class MarianMT:
         def __init__(self, src_lang: str, target_lang: str):
@@ -329,9 +351,125 @@ class Translator:
             except Exception as e:
                 return f"[Translation Exception]: {e}."
 
+    class OnlineTranslators:
+        def __init__(self, provider: str, transl_params: dict, src_lang: str, target_lang: str):
+            from deep_translator import (
+                BaiduTranslator,
+                ChatGptTranslator,
+                DeeplTranslator,
+                GoogleTranslator,
+                LibreTranslator,
+                MicrosoftTranslator,
+                MyMemoryTranslator,
+                PapagoTranslator,
+                QcriTranslator,
+                YandexTranslator,
+            )
+
+            self.provider = provider or Translator.OnlineProviders.GOOGLE
+            self.translator = None
+            self.domain = None
+
+            transl_params = transl_params or {}
+            api_key = transl_params.get("api_key", "")
+            api_secret = transl_params.get("api_secret", "")
+            client_id = transl_params.get("client_id", "")
+            region = transl_params.get("region", "")
+            self.domain = transl_params.get("domain", "")
+            libre_mirror = transl_params.get("libre_mirror", "libretranslate.com")
+
+            src_code = self._lang_to_code(src_lang, self.provider)
+            target_code = self._lang_to_code(target_lang, self.provider)
+
+            match self.provider:
+                case Translator.OnlineProviders.GOOGLE:
+                    self.translator = GoogleTranslator(source=src_code, target=target_code)
+                case Translator.OnlineProviders.MYMEMORY:
+                    self.translator = MyMemoryTranslator(source=src_code, target=target_code)
+                case Translator.OnlineProviders.DEEPL:
+                    self.translator = DeeplTranslator(source=src_code, target=target_code, api_key=api_key)
+                case Translator.OnlineProviders.MICROSOFT:
+                    self.translator = MicrosoftTranslator(source=src_code, target=target_code, api_key=api_key, region=region or None)
+                case Translator.OnlineProviders.LIBRE:
+                    mirror_cfg = Translator.LIBRE_MIRRORS.get(libre_mirror, Translator.LIBRE_MIRRORS["libretranslate.com"])
+                    mirror_requires_key = mirror_cfg["api_key_required"]
+                    self.translator = LibreTranslator(
+                        source=src_code,
+                        target=target_code,
+                        api_key=(api_key if mirror_requires_key else None),
+                        custom_url=mirror_cfg["url"],
+                        use_free_api=not mirror_requires_key,
+                    )
+                case Translator.OnlineProviders.CHATGPT:
+                    self.translator = ChatGptTranslator(
+                        source=self._lang_to_name(src_lang),
+                        target=self._lang_to_name(target_lang),
+                        api_key=api_key,
+                    )
+                case Translator.OnlineProviders.BAIDU:
+                    self.translator = BaiduTranslator(source=src_code, target=target_code, appid=client_id, appkey=api_secret)
+                case Translator.OnlineProviders.PAPAGO:
+                    self.translator = PapagoTranslator(source=src_code, target=target_code, client_id=client_id, secret_key=api_secret)
+                case Translator.OnlineProviders.QCRI:
+                    self.translator = QcriTranslator(source=src_code, target=target_code, api_key=api_key)
+                    if not self.domain:
+                        self.domain = "general"
+                case Translator.OnlineProviders.YANDEX:
+                    self.translator = YandexTranslator(source=src_code, target=target_code, api_key=api_key)
+                case _:
+                    raise ValueError(f"Unknown online translator provider: {self.provider}")
+
+        @staticmethod
+        def _lang_to_code(lang: str, provider: str) -> str:
+            match provider:
+                case Translator.OnlineProviders.MYMEMORY:
+                    return {
+                        "English": "en-US",
+                        "German": "de-DE",
+                        "Serbian Latin": "sr-Latn-RS",
+                        "Serbian Cyrillic": "sr-Cyrl-RS",
+                        "Serbian": "sr-Latn-RS",
+                    }.get(lang, "auto")
+                case Translator.OnlineProviders.MICROSOFT:
+                    return {
+                        "English": "en",
+                        "German": "de",
+                        "Serbian Latin": "sr-latn",
+                        "Serbian Cyrillic": "sr-cyrl",
+                        "Serbian": "sr-latn",
+                    }.get(lang, "auto")
+
+            return {
+                "English": "en",
+                "German": "de",
+                "Serbian": "sr",
+                "Serbian Latin": "sr",
+                "Serbian Cyrillic": "sr",
+            }.get(lang, "auto")
+
+        @staticmethod
+        def _lang_to_name(lang: str) -> str:
+            return {
+                "English": "english",
+                "German": "german",
+                "Serbian": "serbian",
+                "Serbian Latin": "serbian",
+                "Serbian Cyrillic": "serbian",
+            }.get(lang, "auto")
+
+        def translate_text(self, text: str) -> str:
+            if self.provider == Translator.OnlineProviders.QCRI:
+                result = self.translator.translate(text, domain=self.domain)
+            else:
+                result = self.translator.translate(text)
+
+            if isinstance(result, list):
+                return "\n".join(str(x) for x in result)
+            return result
+
     def __init__(self, engine_id, transl_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
         self.engine_id = engine_id
-        self.transl_params = transl_params
+        self.transl_params = transl_params or {}
         self.engine = None
         self.src_lang = src_lang
         self.target_lang = target_lang
@@ -466,9 +604,13 @@ class Translator:
             if not text.strip():
                 continue
 
-            proc_start = time.perf_counter()
-            transl_text = self.engine.translate_text(text)
-            proc_end = time.perf_counter()
+            try:
+                proc_start = time.perf_counter()
+                transl_text = self.engine.translate_text(text)
+                proc_end = time.perf_counter()
+            except Exception as e:
+                logger.error(f"[Translator] {e}")
+                continue
 
             self.sender_queue.put({
                 "type": "statistics",
@@ -523,6 +665,9 @@ class Translator:
                         self.engine = self.NLLB(self.src_lang, self.target_lang)
                     case Translator.Engine.EUROLLM:
                         self.engine = self.EuroLLM(self.transl_params["api_key"], self.src_lang, self.target_lang)
+                    case Translator.Engine.ONLINE_TRANSLATORS:
+                        provider = self.transl_params.get("provider", Translator.OnlineProviders.GOOGLE)
+                        self.engine = self.OnlineTranslators(provider, self.transl_params, self.src_lang, self.target_lang)
             except Exception as e:
                 logger.error(f"[Translator] Error initializing translation engine: {e}")
                 self.engine = None

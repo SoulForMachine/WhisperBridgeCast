@@ -723,7 +723,7 @@ class CaptionerUI:
         self.net_server_asr_proc_t_max_label = ttk.Label(stats_frame, text="max: --")
         self.net_server_asr_proc_t_max_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
-        self.net_server_asr_proc_t_roll_avg_label = ttk.Label(stats_frame, text="roll avg.: --")
+        self.net_server_asr_proc_t_roll_avg_label = ttk.Label(stats_frame, text="roll avg: --")
         self.net_server_asr_proc_t_roll_avg_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(stats_frame)
@@ -1106,7 +1106,7 @@ class CaptionerUI:
         self.net_server_asr_proc_t_label.config(text="last: --")
         self.net_server_asr_proc_t_min_label.config(text="min: --")
         self.net_server_asr_proc_t_max_label.config(text="max: --")
-        self.net_server_asr_proc_t_roll_avg_label.config(text="roll avg.: --")
+        self.net_server_asr_proc_t_roll_avg_label.config(text="roll avg: --")
         self.net_server_asr_proc_t_graph.clear()
         self.net_server_transl_queue_progress.config(value=0)
         self.net_server_transl_queue_label.config(text="words buffered: --")
@@ -1372,7 +1372,7 @@ class CaptionerUI:
                             self.gui_queue.put(upd_asr_proc_time)
                         case "asr_roll_avg_proc_time":
                             def upd_asr_roll_avg_proc_time(stat_value=stat_value):
-                                self.net_server_asr_proc_t_roll_avg_label.config(text=f"roll avg.: {stat_value:.3f} s")
+                                self.net_server_asr_proc_t_roll_avg_label.config(text=f"roll avg: {stat_value:.3f} s")
                             self.gui_queue.put(upd_asr_roll_avg_proc_time)
 
                             new_chunk_size = max(0.5, min(3.0, stat_value))

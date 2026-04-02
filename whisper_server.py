@@ -284,7 +284,10 @@ class Translator:
             model_id = "utter-project/EuroLLM-1.7B"
             self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=True)
             bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype="float16",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
             )
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_id,
@@ -293,6 +296,8 @@ class Translator:
                 device_map="auto"
             )
             #self.model = self.model.to("cuda")
+            import torch
+            self.model = torch.compile(self.model)
 
             self.src_lang = src_lang
             self.target_lang = target_lang
@@ -303,12 +308,15 @@ class Translator:
                 text += '...'
             prompt = f"{self.src_lang}: {text} {self.target_lang}:"
             inputs = self.tokenizer(prompt, return_tensors="pt")
-            inputs.to(self.model.device)
+            inputs = inputs.to(self.model.device)
+            #import torch
+            #with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
-                #do_sample=False,      # Deterministic
-                #num_beams=5,          # Beam search
+                max_new_tokens=128,
+                do_sample=False,      # Deterministic
+                num_beams=1,          # Beam search
+                use_cache=True,
                 #early_stopping=True,
                 pad_token_id=self.tokenizer.eos_token_id
             )

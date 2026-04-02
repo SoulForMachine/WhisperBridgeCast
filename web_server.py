@@ -347,12 +347,15 @@ class WebTranscriptServer:
     .content { white-space: pre-wrap; word-break: break-word; }
     .content .unconfirmed { color: var(--muted); opacity: 0.7; }
     .muted { color: var(--muted); }
+    .hide-source .orig-row { display: none; }
+    .hide-source .entry.only-source { display: none; }
   </style>
 </head>
 <body>
   <header>
     <h1>Live Transcript</h1>
-    <div class="hint">Auto-scroll only when you are at the bottom. <a id="jump-bottom" href="#">Go to latest</a></div>
+    <div class="hint">Go to the <a id="jump-bottom" href="#">latest</a> text. 
+    <a id="toggle-source" href="#">Hide</a> source language text.</div>
   </header>
   <main>
     <section class="stream">
@@ -363,14 +366,27 @@ class WebTranscriptServer:
   <script>
     const entriesBox = document.getElementById("entries");
     const jumpLink = document.getElementById("jump-bottom");
+    const sourceToggleLink = document.getElementById("toggle-source");
     let wakeLock = null;
+    let showSource = true;
 
     function atBottom() {
-      const threshold = 16;
+      const threshold = 36;
       return window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold;
     }
 
     const entriesById = new Map();
+
+    function refreshEntryVisibility(entry) {
+      const hasOrig = Boolean(entry.querySelector(".orig-row"));
+      const hasTransl = Boolean(entry.querySelector(".transl-row"));
+      entry.classList.toggle("only-source", hasOrig && !hasTransl);
+    }
+
+    function applySourceVisibility() {
+      document.body.classList.toggle("hide-source", !showSource);
+      sourceToggleLink.textContent = showSource ? "Hide" : "View";
+    }
 
     function getOrCreateEntry(entryId) {
       if (entriesById.has(entryId)) {
@@ -446,6 +462,8 @@ class WebTranscriptServer:
         upsertRow(entry, "transl", payload.target_lang, payload.translation, "");
       }
 
+      refreshEntryVisibility(entry);
+
       if (stick) {
         window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
       }
@@ -471,6 +489,14 @@ class WebTranscriptServer:
       e.preventDefault();
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
     });
+
+    sourceToggleLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      showSource = !showSource;
+      applySourceVisibility();
+    });
+
+    applySourceVisibility();
 
     // Keep screen on where supported (primarily Chromium-based mobile browsers).
     async function requestWakeLock() {

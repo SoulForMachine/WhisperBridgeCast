@@ -689,7 +689,7 @@ class Translator:
     def run_thread_main(self):
         self.sender_queue.put({
             "type": "status",
-            "value": "translator_initializing"
+            "value": { "status": "translator_initializing" }
         })
 
         self.initialize_engine()
@@ -700,7 +700,7 @@ class Translator:
 
         self.sender_queue.put({
             "type": "status",
-            "value": "translator_initialized"
+            "value": { "status": "translator_initialized" }
         })
 
         self.transl_ready_event.set()
@@ -1077,7 +1077,7 @@ class WhisperServer:
 
             netc.send_json(conn, {
                 "type": "status",
-                "value": "ready"
+                "value": { "status": "ready" }
             })
 
             # Receive audio chunks and control messages
@@ -1124,7 +1124,7 @@ class WhisperServer:
                 # Confirm shutdown request
                 sender_queue.put({
                     "type": "status",
-                    "value": "conn_shutdown"
+                    "value": { "status": "conn_shutdown" }
                 })
 
             # Stop the sender thread
@@ -1176,7 +1176,7 @@ def asr_subprocess_main(
 
     sender_queue.put({
         "type": "status",
-        "value": "asr_initializing"
+        "value": { "status": "asr_initializing" }
     })
 
     whisper_online = WhisperOnline(client_params, logger)
@@ -1184,7 +1184,7 @@ def asr_subprocess_main(
 
     sender_queue.put({
         "type": "status",
-        "value": "asr_initialized"
+        "value": { "status": "asr_initialized" }
     })
 
     has_vac = whisper_online.has_vac()

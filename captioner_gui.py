@@ -1348,8 +1348,17 @@ class CaptionerUI:
         self.audio_temp_queue_2 = None
 
     def whisper_client_callback(self, event_type: str, data: dict):
+
+        def on_disconnect_from_server():
+            self.on_disconnect_from_server()
+            self.net_server_status_label.config(text="disconnected")
+            self.net_server_status_indicator.set_state("disconnected")
+            self.net_server_asr_status_indicator.set_state("uninitialized")
+            self.net_server_transl_status_indicator.set_state("uninitialized")
+            self.clear_net_server_stats()
+
         match event_type:
-            case "statistics":
+            case "server_statistics":
                 for stat_name, stat_value in data.items():
                     match stat_name:
                         case "asr_in_q_size":
@@ -1376,7 +1385,8 @@ class CaptionerUI:
                             self.gui_queue.put(upd_asr_roll_avg_proc_time)
 
                             new_chunk_size = max(0.5, min(3.0, stat_value))
-                            self.audio_producer.min_chunk_size = new_chunk_size
+                            if self.audio_producer:
+                                self.audio_producer.min_chunk_size = new_chunk_size
                             if self.audio_producer_2:
                                 self.audio_producer_2.min_chunk_size = new_chunk_size
                         case "last_transl_proc_time":
@@ -1393,64 +1403,65 @@ class CaptionerUI:
                                     stat_value = "nonvoice"
                                 self.net_server_asr_vac_indicator.set_state(stat_value)
                             self.gui_queue.put(upd_vac_state)
-            case "connecting":
-                def on_connecting():
-                    self.net_server_status_label.config(text="connecting")
-                self.gui_queue.put(on_connecting)
-            case "connected":
-                def on_connected():
-                    self.is_connected_to_server = True
-                    self.connect_btn.config(text="Disconnect", state="normal")
-                    self.stats = Stats()
-                    self.net_server_status_label.config(text="connected")
-                    self.net_server_status_indicator.set_state("connected")
-                self.gui_queue.put(on_connected)
-            case "conn_lost" | "conn_shutdown" | "params_send_error":
-                def on_disconnect_from_server():
-                    self.on_disconnect_from_server()
-                    self.net_server_status_label.config(text="disconnected")
-                    self.net_server_status_indicator.set_state("disconnected")
-                    self.net_server_asr_status_indicator.set_state("uninitialized")
-                    self.net_server_transl_status_indicator.set_state("uninitialized")
-                    self.clear_net_server_stats()
-                self.gui_queue.put(on_disconnect_from_server)
-            case "conn_error":
-                def on_conn_error():
-                    self.stop_whisper_client()
-                    self.connect_btn.config(text="Connect", state="normal")
-                    self.record_btn.config(text="Record", state="disabled")
-                    self.is_connected_to_server = False
-                    self.net_server_status_label.config(text="disconnected")
-                    self.net_server_status_indicator.set_state("disconnected")
-                    self.net_server_asr_status_indicator.set_state("uninitialized")
-                    self.net_server_transl_status_indicator.set_state("uninitialized")
-                    self.clear_net_server_stats()
-                self.gui_queue.put(on_conn_error)
-            case "disconnecting":
-                def on_disconnecting():
-                    self.net_server_status_label.config(text="disconnecting")
-                self.gui_queue.put(on_disconnecting)
-            case "ready":
-                def on_ready():
-                    self.record_btn.config(text="Record", state="normal")
-                    self.net_server_status_label.config(text="ready")
-                self.gui_queue.put(on_ready)
-            case "translator_initializing":
-                def on_transl_init():
-                    self.net_server_transl_status_indicator.set_state("initializing")
-                self.gui_queue.put(on_transl_init)
-            case "translator_initialized":
-                def on_transl_initialized():
-                    self.net_server_transl_status_indicator.set_state("ready")
-                self.gui_queue.put(on_transl_initialized)
-            case "asr_initializing":
-                def on_asr_init():
-                    self.net_server_asr_status_indicator.set_state("initializing")
-                self.gui_queue.put(on_asr_init)
-            case "asr_initialized":
-                def on_asr_initialized():
-                    self.net_server_asr_status_indicator.set_state("ready")
-                self.gui_queue.put(on_asr_initialized)
+
+            case "client_status":
+                match data.get("status", ""):
+                    case "connecting":
+                        def on_connecting():
+                            self.net_server_status_label.config(text="connecting")
+                        self.gui_queue.put(on_connecting)
+                    case "connected":
+                        def on_connected():
+                            self.is_connected_to_server = True
+                            self.connect_btn.config(text="Disconnect", state="normal")
+                            self.stats = Stats()
+                            self.net_server_status_label.config(text="connected")
+                            self.net_server_status_indicator.set_state("connected")
+                        self.gui_queue.put(on_connected)
+                    case "conn_lost" | "params_send_error":
+                        self.gui_queue.put(on_disconnect_from_server)
+                    case "conn_error":
+                        def on_conn_error():
+                            self.stop_whisper_client()
+                            self.connect_btn.config(text="Connect", state="normal")
+                            self.record_btn.config(text="Record", state="disabled")
+                            self.is_connected_to_server = False
+                            self.net_server_status_label.config(text="disconnected")
+                            self.net_server_status_indicator.set_state("disconnected")
+                            self.net_server_asr_status_indicator.set_state("uninitialized")
+                            self.net_server_transl_status_indicator.set_state("uninitialized")
+                            self.clear_net_server_stats()
+                        self.gui_queue.put(on_conn_error)
+                    case "disconnecting":
+                        def on_disconnecting():
+                            self.net_server_status_label.config(text="disconnecting")
+                        self.gui_queue.put(on_disconnecting)
+
+            case "server_status":
+                match data.get("status", ""):
+                    case "ready":
+                        def on_ready():
+                            self.record_btn.config(text="Record", state="normal")
+                            self.net_server_status_label.config(text="ready")
+                        self.gui_queue.put(on_ready)
+                    case "translator_initializing":
+                        def on_transl_init():
+                            self.net_server_transl_status_indicator.set_state("initializing")
+                        self.gui_queue.put(on_transl_init)
+                    case "translator_initialized":
+                        def on_transl_initialized():
+                            self.net_server_transl_status_indicator.set_state("ready")
+                        self.gui_queue.put(on_transl_initialized)
+                    case "asr_initializing":
+                        def on_asr_init():
+                            self.net_server_asr_status_indicator.set_state("initializing")
+                        self.gui_queue.put(on_asr_init)
+                    case "asr_initialized":
+                        def on_asr_initialized():
+                            self.net_server_asr_status_indicator.set_state("ready")
+                        self.gui_queue.put(on_asr_initialized)
+                    case "conn_shutdown":
+                        self.gui_queue.put(on_disconnect_from_server)
 
     def audio_producer_callback(self, event_type: str, data: dict):
         match event_type:
@@ -1831,14 +1842,17 @@ class WhisperClient:
         self.net_send_queue = net_send_queue
         self.net_recv_queue = net_recv_queue
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
-        self.connected_event = threading.Event()
+        self.connected_event = None
         self.results_thread = None
         self.whisper_client_thread = None
+        self.stop_event = None
         self.is_running = False
 
     def start(self):
         if not self.is_running:
             self.is_running = True
+            self.connected_event = threading.Event()
+            self.stop_event = threading.Event()
             self.whisper_client_thread = threading.Thread(target=self.run)
             self.whisper_client_thread.start()
 
@@ -1848,26 +1862,28 @@ class WhisperClient:
             self.net_send_queue.put(None)
             self.whisper_client_thread.join()
             self.whisper_client_thread = None
+            self.connected_event = None
+            self.stop_event = None
 
     def run(self):
-        self.notif_callback("connecting", {})
+        self.notif_callback("client_status", {"status": "connecting"})
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.server_url, self.port))
         except Exception as e:
             logger.error(f"Could not connect to the whisper server: {e}")
-            self.notif_callback("conn_error", {"message": str(e)})
+            self.notif_callback("client_status", {"status": "conn_error", "message": str(e)})
             return
 
         self.connected_event.set()
-        self.notif_callback("connected", {})
+        self.notif_callback("client_status", {"status": "connected"})
 
         # Step 1: send params JSON
         try:
             netc.send_json(sock, self.params)
         except Exception as e:
             logger.error(f"Error sending params to the server: {e}")
-            self.notif_callback("params_send_error", {"message": str(e)})
+            self.notif_callback("client_status", {"status": "params_send_error", "message": str(e)})
             return
 
         # Step 2: start a thread to receive results
@@ -1885,7 +1901,7 @@ class WhisperClient:
                         "command": "stop"
                     })
                     sock.shutdown(socket.SHUT_WR)
-                    self.notif_callback("disconnecting", {})
+                    self.notif_callback("client_status", {"status": "disconnecting"})
                     break
 
                 if type(data) == np.ndarray:
@@ -1895,30 +1911,33 @@ class WhisperClient:
 
         except OSError as e:
             logger.error(f"Connection lost: {e}")
-            self.notif_callback("conn_lost", {"source": "sender", "message": str(e)})
+            self.notif_callback("client_status", {"status": "conn_lost", "source": "sender", "message": str(e)})
         except Exception as e:
             logger.error(f"Sender exception: {e}.")
-            self.notif_callback("conn_lost", {"source": "sender", "message": str(e)})
+            self.notif_callback("client_status", {"status": "conn_lost", "source": "sender", "message": str(e)})
         finally:
+            self.stop_event.set()  # signal the results thread to stop
             self.results_thread.join()  # wait for results thread to finish
             self.results_thread = None
+            self.stop_event = None
+            self.connected_event = None
             sock.close()
 
     def listen_for_results(self, sock):
         # Receive status and translation messages from the server.
-        while True:
+        while not self.stop_event.is_set():
             try:
                 msg_type, msg = netc.recv_message(sock)
             except OSError as e:
                 logger.error(f"Connection lost: {e}.")
-                self.notif_callback("conn_lost", {"source": "receiver", "message": str(e)})
+                self.notif_callback("client_status", {"status": "conn_lost", "source": "receiver", "message": str(e)})
                 break
             except ValueError as e:  # JSON decode errors from corrupted/partial messages
                 logger.error(f"Receiver JSON error: {e}.")
                 continue
             except Exception as e:
                 logger.error(f"Receiver exception: {e}.")
-                self.notif_callback("conn_lost", {"source": "receiver", "message": str(e)})
+                self.notif_callback("client_status", {"status": "conn_lost", "source": "receiver", "message": str(e)})
                 break
 
             if msg is None or msg_type != "json":
@@ -1931,27 +1950,26 @@ class WhisperClient:
                     self.net_recv_queue.put((text, complete))
             elif msg_type == "statistics":
                 values = msg.get("values", {})
-                self.notif_callback("statistics", values)
+                self.notif_callback("server_statistics", values)
             elif msg_type == "status":
-                match msg.get("value"):
-                    case "ready":
-                        # Here we handle the notification that the server is ready to receive audio.
-                        self.notif_callback("ready", {})
-                    case "conn_shutdown":
-                        self.notif_callback("conn_shutdown", {})
-                        break
-                    case "translator_initializing":
-                        logger.info("Translation engine is initializing...")
-                        self.notif_callback("translator_initializing", {})
-                    case "translator_initialized":
-                        logger.info("Translation engine initialized.")
-                        self.notif_callback("translator_initialized", {})
-                    case "asr_initializing":
-                        logger.info("ASR engine is initializing...")
-                        self.notif_callback("asr_initializing", {})
-                    case "asr_initialized":
-                        logger.info("ASR engine initialized.")
-                        self.notif_callback("asr_initialized", {})
+                value = msg.get("value")
+                self.notif_callback("server_status", value)
+
+                status_str = {
+                    "ready": "Server is ready to receive audio.",
+                    "conn_shutdown": "Connection has been shut down.",
+                    "translator_initializing": "Translation engine is initializing...",
+                    "translator_initialized": "Translation engine initialized.",
+                    "asr_initializing": "ASR engine is initializing...",
+                    "asr_initialized": "ASR engine initialized."
+                }
+                status = value.get("status", "")
+                status_message = status_str.get(status)
+                if status_message:
+                    logger.info(status_message)
+
+                if status == "conn_shutdown":
+                    break
             else:
                 logger.warning(f"Unknown message: {msg}")
 

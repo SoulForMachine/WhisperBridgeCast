@@ -271,6 +271,7 @@ class WebTranscriptServer:
       --accent-2: #3b82f6;
       --pill: #1f2937;
       --border: #1f2937;
+      --light-border: #374151;
       --font: "Segoe UI", system-ui, -apple-system, sans-serif;
     }
     * { box-sizing: border-box; }
@@ -347,7 +348,15 @@ class WebTranscriptServer:
     .content { white-space: pre-wrap; word-break: break-word; }
     .content .unconfirmed { color: var(--muted); opacity: 0.7; }
     .muted { color: var(--muted); }
+    .sep {
+      border: 0;
+      border-top: 1px solid var(--light-border);
+      width: 90%;
+      margin: 12px auto;
+      opacity: 1.0;
+    }
     .hide-source .orig-row { display: none; }
+    .hide-source .sep { display: none; }
     .hide-source .entry.only-source { display: none; }
   </style>
 </head>
@@ -371,7 +380,7 @@ class WebTranscriptServer:
     let showSource = true;
 
     function atBottom() {
-      const threshold = 36;
+      const threshold = 100;
       return window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold;
     }
 
@@ -381,6 +390,23 @@ class WebTranscriptServer:
       const hasOrig = Boolean(entry.querySelector(".orig-row"));
       const hasTransl = Boolean(entry.querySelector(".transl-row"));
       entry.classList.toggle("only-source", hasOrig && !hasTransl);
+    }
+
+    function refreshEntrySeparator(entry) {
+      const hasOrig = Boolean(entry.querySelector(".orig-row"));
+      const hasTransl = Boolean(entry.querySelector(".transl-row"));
+      let sep = entry.querySelector(".sep");
+
+      if (hasOrig && hasTransl) {
+        if (!sep) {
+          sep = document.createElement("hr");
+          sep.className = "sep";
+          const translRow = entry.querySelector(".transl-row");
+          entry.insertBefore(sep, translRow);
+        }
+      } else if (sep) {
+        sep.remove();
+      }
     }
 
     function applySourceVisibility() {
@@ -463,6 +489,7 @@ class WebTranscriptServer:
       }
 
       refreshEntryVisibility(entry);
+      refreshEntrySeparator(entry);
 
       if (stick) {
         window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });

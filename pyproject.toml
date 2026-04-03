@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whisperbridgecast"
+version = "0.5.0"
+description = "Live Whisper-based captioning with server and GUI CLIs"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "requests",
+    "pyaudio; sys_platform != 'win32'",
+    "pyaudiowpatch; sys_platform == 'win32'",
+    "soxr",
+    "soundfile",
+    "spacy",
+    "torch",
+    "faster-whisper",
+    "librosa",
+    "transformers",
+    "sentencepiece",
+    "sacremoses",
+]
+
+[project.optional-dependencies]
+optional = [
+    "bitsandbytes",
+    "datasets",
+    "deep-translator",
+    "google-genai",
+    "huggingface-hub",
+    "openai",
+    "openai-whisper",
+    "whisper-timestamped",
+    "mlx-whisper; sys_platform == 'darwin'",
+    "mlx; sys_platform == 'darwin'",
+]
+all = [
+    "bitsandbytes",
+    "datasets",
+    "deep-translator",
+    "google-genai",
+    "huggingface-hub",
+    "openai",
+    "openai-whisper",
+    "whisper-timestamped",
+    "mlx-whisper; sys_platform == 'darwin'",
+    "mlx; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+whisper_server = "app.server.main:main"
+captioner_gui = "app.gui.main:main"
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
+
+[tool.setuptools.package-data]
+"app.server" = ["data/*.wav"]

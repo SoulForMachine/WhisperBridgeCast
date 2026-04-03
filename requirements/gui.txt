@@ -1,0 +1,5 @@
+-r base.txt
+
+pyaudio; sys_platform != "win32"
+pyaudiowpatch; sys_platform == "win32"
+soxr

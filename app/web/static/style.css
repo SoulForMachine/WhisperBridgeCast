@@ -1,0 +1,96 @@
+:root {
+  --bg: #0f172a;
+  --panel: #111827;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #22c55e;
+  --accent-2: #3b82f6;
+  --pill: #1f2937;
+  --border: #1f2937;
+  --light-border: #374151;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+}
+header {
+  position: sticky;
+  top: 0;
+  padding: 12px 16px;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  z-index: 1;
+}
+header h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; }
+header .hint { color: var(--muted); font-size: 13px; }
+header .hint a,
+header .hint a:visited,
+header .hint a:hover,
+header .hint a:active {
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+main { max-width: 900px; margin: 0 auto; padding: 8px 16px 24px; }
+section.stream {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 50vh;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+}
+section h2 {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+#entries { display: flex; flex-direction: column; gap: 12px; }
+.entry {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255,255,255,0.02);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 4px 0;
+}
+.pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--pill);
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.pill.orig { background: rgba(34, 197, 94, 0.15); color: #bbf7d0; }
+.pill.transl { background: rgba(59, 130, 246, 0.15); color: #bfdbfe; }
+.content { white-space: pre-wrap; word-break: break-word; }
+.content .unconfirmed { color: var(--muted); opacity: 0.7; }
+.muted { color: var(--muted); }
+.sep {
+  border: 0;
+  border-top: 1px solid var(--light-border);
+  width: 90%;
+  margin: 12px auto;
+  opacity: 1.0;
+}
+.hide-source .orig-row { display: none; }
+.hide-source .sep { display: none; }
+.hide-source .entry.only-source { display: none; }

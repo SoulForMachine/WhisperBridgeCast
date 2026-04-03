@@ -45,8 +45,8 @@ class CaptionsOverlay:
         # Two buttons centered
         #button_frame = tk.Frame(self.overlay_wnd)
 #
-        #font_inc = tk.Button(button_frame, text="⇧", fg="white", bg="black", command=self.increase_font_size)
-        #font_dec = tk.Button(button_frame, text="⇩", fg="white", bg="black", command=self.decrease_font_size)
+        #font_inc = tk.Button(button_frame, text="Γçº", fg="white", bg="black", command=self.increase_font_size)
+        #font_dec = tk.Button(button_frame, text="Γç⌐", fg="white", bg="black", command=self.decrease_font_size)
         #font_inc.pack(side="left", padx=5)
         #font_dec.pack(side="left", padx=5)
         #button_frame.place(relx=0.5, rely=1.0, anchor="s")

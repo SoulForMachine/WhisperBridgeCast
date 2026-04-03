@@ -1,0 +1,13 @@
+# Optional ASR backends
+openai
+openai-whisper
+whisper-timestamped
+mlx-whisper; sys_platform == "darwin"
+mlx; sys_platform == "darwin"
+
+# Optional translation backends
+bitsandbytes
+datasets
+deep-translator
+google-genai
+huggingface-hub

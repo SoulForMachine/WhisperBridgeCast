@@ -1,0 +1,3 @@
+-r gui.txt
+-r server.txt
+-r server-optional.txt

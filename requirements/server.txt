@@ -1,0 +1,10 @@
+-r base.txt
+
+soundfile
+spacy
+torch
+faster-whisper
+librosa
+transformers
+sentencepiece
+sacremoses

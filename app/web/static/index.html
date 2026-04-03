@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Transcript</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Live Transcript</h1>
+    <div class="hint">Go to the <a id="jump-bottom" href="#">latest</a> text.
+    <a id="toggle-source" href="#">Hide</a> source language text.</div>
+  </header>
+  <main>
+    <section class="stream">
+      <h2>Transcript</h2>
+      <div id="entries" aria-live="polite"></div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

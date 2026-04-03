@@ -1,26 +1,6 @@
-numpy
-Requests
-pyaudio; sys_platform != "win32"
-pyaudiowpatch; sys_platform == "win32"
-tkinter; sys_platform == "win32"
-soundfile
-pydot
-spacy
-soxr
+# Core server + GUI dependencies
+-r requirements/gui.txt
+-r requirements/server.txt
 
-# Deep learning backend
-torch
-torchvision
-torchaudio
-
-# Whisper
-faster_whisper
-librosa
-
-# Hugging Face Transformers and dependencies
-transformers
-datasets
-sentencepiece
-sacremoses
-bitsandbytes
-deep-translator
+# Optional backends and provider SDKs:
+# -r requirements/server-optional.txt

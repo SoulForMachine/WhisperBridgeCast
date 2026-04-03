@@ -12,7 +12,7 @@ class VADIterator:
                  threshold: float = 0.5,
                  sampling_rate: int = 16000,
                  min_silence_duration_ms: int = 500,  # makes sense on one recording that I checked
-                 speech_pad_ms: int = 100             # same 
+                 speech_pad_ms: int = 100             # same
                  ):
 
         """
@@ -100,13 +100,13 @@ class VADIterator:
         return None
 
 #######################
-# because Silero now requires exactly 512-sized audio chunks 
+# because Silero now requires exactly 512-sized audio chunks
 
 import numpy as np
 class FixedVADIterator(VADIterator):
     '''It fixes VADIterator by allowing to process any audio length, not only exactly 512 frames at once.
-    If audio to be processed at once is long and multiple voiced segments detected, 
-    then __call__ returns the start of the first segment, and end (or middle, which means no end) of the last segment. 
+    If audio to be processed at once is long and multiple voiced segments detected,
+    then __call__ returns the start of the first segment, and end (or middle, which means no end) of the last segment.
     '''
 
     def reset_states(self):
@@ -114,7 +114,7 @@ class FixedVADIterator(VADIterator):
         self.buffer = np.array([],dtype=np.float32)
 
     def __call__(self, x, return_seconds=False):
-        self.buffer = np.append(self.buffer, x) 
+        self.buffer = np.append(self.buffer, x)
         ret = None
         while len(self.buffer) >= 512:
             r = super().__call__(self.buffer[:512], return_seconds=return_seconds)
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     audio_buffer = np.array([0]*(512),dtype=np.float32)
     vac(audio_buffer)
 
-    # this crashes on the non FixedVADIterator with 
+    # this crashes on the non FixedVADIterator with
     # ops.prim.RaiseException("Input audio chunk is too short", "builtins.ValueError")
     audio_buffer = np.array([0]*(512-1),dtype=np.float32)
     vac(audio_buffer)

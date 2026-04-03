@@ -1916,15 +1916,29 @@ class WhisperClient:
             logger.error(f"Sender exception: {e}.")
             self.notif_callback("client_status", {"status": "conn_lost", "source": "sender", "message": str(e)})
         finally:
-            self.stop_event.set()  # signal the results thread to stop
-            self.results_thread.join()  # wait for results thread to finish
+            # The results thread will receive a shutdown signal from the server,
+            # but we also set a local stop event in case of connection loss to unblock it.
+            self.results_thread.join(timeout=2.0)
+            if self.results_thread.is_alive():
+                self.stop_event.set()  # signal the results thread to stop
+                self.results_thread.join()  # wait again for it to finish
+
             self.results_thread = None
-            self.stop_event = None
             self.connected_event = None
+            self.stop_event = None
             sock.close()
 
     def listen_for_results(self, sock):
-        # Receive status and translation messages from the server.
+        srv_status_strs = {
+            "ready": "Server is ready to receive audio.",
+            "conn_shutdown": "Connection has been shut down.",
+            "translator_initializing": "Translation engine is initializing...",
+            "translator_initialized": "Translation engine initialized.",
+            "asr_initializing": "ASR engine is initializing...",
+            "asr_initialized": "ASR engine initialized."
+        }
+
+        # Receive status, statistics and translation messages from the server.
         while not self.stop_event.is_set():
             try:
                 msg_type, msg = netc.recv_message(sock)
@@ -1955,19 +1969,13 @@ class WhisperClient:
                 value = msg.get("value")
                 self.notif_callback("server_status", value)
 
-                status_str = {
-                    "ready": "Server is ready to receive audio.",
-                    "conn_shutdown": "Connection has been shut down.",
-                    "translator_initializing": "Translation engine is initializing...",
-                    "translator_initialized": "Translation engine initialized.",
-                    "asr_initializing": "ASR engine is initializing...",
-                    "asr_initialized": "ASR engine initialized."
-                }
                 status = value.get("status", "")
-                status_message = status_str.get(status)
+                status_message = srv_status_strs.get(status)
                 if status_message:
                     logger.info(status_message)
 
+                # Break the loop and end the thread if we receive a shutdown status from the server,
+                # which is a confirmation that it received our stop signal and is closing the connection.
                 if status == "conn_shutdown":
                     break
             else:

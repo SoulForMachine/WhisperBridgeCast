@@ -2,6 +2,8 @@ import logging
 import multiprocessing as mp
 import queue
 import threading
+import spacy
+from spacy.tokens import Token
 
 from app.server.transl_backends import (
     TranslBase,
@@ -38,7 +40,7 @@ class Translator:
         self.output_queues = output_queues
         self.sender_queue = sender_queue
         self.only_complete_sent = only_complete_sent
-        self.current_text = ""
+        self.confirmed_text = ""
         self.unconfirmed_text = ""
 
         self.loop_thread = None
@@ -50,73 +52,240 @@ class Translator:
 
         self.next_text_id = 0
         self.pending_partial_id = None
+        self.source_diff_enabled = bool(self.transl_params.get("source_diff_enabled", False))
+        self.target_diff_enabled = bool(self.transl_params.get("target_diff_enabled", False))
+        self._prev_source_conf_tok_count = 0
+        self._prev_source_unconf_tokens: list[Token] = []
+        self._prev_target_tokens: list[Token] = []
 
-        import spacy
+        self.src_nlp = spacy.blank(self.src_lang_code)
+        self.src_nlp.add_pipe("sentencizer")
 
-        self.nlp = spacy.blank(self.src_lang_code)
-        self.nlp.add_pipe("sentencizer")
+        self.dest_nlp = spacy.blank(self.target_lang_code)
+        self.dest_nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6
 
-    def _buffered_word_count(self):
-        # Approximate word count by counting spaces. This is not exact but should be sufficient for statistics.
-        return self.current_text.count(" ") + 1 if self.current_text else 0
+    class Sentence:
+        def __init__(self, text: str = "", tokens: list[Token] = []):
+            self.text = text
+            self.tokens = tokens
 
-    def _send_buffered_text_stats(self):
+        def __bool__(self):
+            return bool(self.text.strip()) and bool(self.tokens)
+
+        def is_sentence_complete(self, next_tokens: list[Token]) -> bool:
+            if not self.tokens:
+                return False
+
+            last = self.tokens[-1]
+
+            # 1. Must end with standalone punctuation
+            if not (last.is_punct and last.text in (".", "!", "?")):
+                return False
+
+            # 2. Reject abbreviations like "Dr."
+            # (those are not split into "." token)
+            if not last.is_punct and last.text.endswith("."):
+                return False
+
+            # 3. Lookahead: skip punctuation
+            i = 0
+            while i < len(next_tokens) and next_tokens[i].is_punct:
+                i += 1
+
+            if i < len(next_tokens):
+                tok = next_tokens[i]
+
+                if tok.is_lower or tok.like_num:
+                    return False
+
+            return True
+
+    def _send_buffered_text_stats(self, sentences: list[tuple[Sentence, Sentence, bool]]):
+        # We send the token count of the last uncomplete sentence, that is token count of
+        # the buffered confirmed + unconfirmed text.
+        buf_token_count = 0
+        if sentences:
+            conf, unconf, complete = sentences[-1]
+            buf_token_count = len(conf.tokens) + len(unconf.tokens) if not complete else 0
+
         self.sender_queue.put(
             {
                 "type": "statistics",
                 "values": {
-                    "transl_buffer_word_count": self._buffered_word_count(),
+                    "transl_buffer_token_count": buf_token_count,
                 },
             }
         )
 
     def add_text(self, confirmed: str, unconfirmed: str):
         # Append new text to the current buffer.
-        self.current_text += confirmed
+        self.confirmed_text += confirmed
         self.unconfirmed_text = unconfirmed
 
-    def get_sentences(self) -> list[tuple[str, str, bool]]:
-        doc = self.nlp(self.current_text)
+    def get_sentences(self) -> list[tuple[Sentence, Sentence, bool]]:
+        doc = self.src_nlp(self.confirmed_text)
+        doc_unc = self.src_nlp(self.unconfirmed_text)
 
         def fix_sent(text):
             text = text.strip()
             text = text[:1].upper() + text[1:] if text else text
             return text
 
-        sentences = [(fix_sent(sent.text), "", True) for sent in doc.sents]
+        sentences: list[tuple[Translator.Sentence, Translator.Sentence, bool]] = []
+        for sent in doc.sents:
+            s = self.Sentence(
+                text=fix_sent(sent.text),
+                tokens=[token for token in sent]
+            )
+            sentences.append((s, Translator.Sentence(), True))
+
+        unc_tokens = []
+        for sent in doc_unc.sents:
+            unc_tokens.extend([token for token in sent])
+
         added_unconfirmed = False
-
-        def is_sentence_complete(sent):
-            if not sent.endswith((".", "!", "?")):
-                return False
-
-            next_piece = self.unconfirmed_text.lstrip()
-            if next_piece:
-                ch = next_piece[0]
-                if ch.islower() or ch.isdigit():
-                    return False
-
-            return True
-
         if sentences:
             last_sent = sentences[-1][0]
-            if not is_sentence_complete(last_sent):
+            if not last_sent.is_sentence_complete(unc_tokens):
                 # last sentence is partial
-                sentences[-1] = (last_sent, self.unconfirmed_text, False)
-                self.current_text = last_sent
+                unc = Translator.Sentence(
+                    text=self.unconfirmed_text,
+                    tokens=unc_tokens
+                )
+                sentences[-1] = (last_sent, unc, False)
+                self.confirmed_text = last_sent.text
                 added_unconfirmed = True
             else:
-                self.current_text = ""
+                self.confirmed_text = ""
 
-        if not added_unconfirmed and self.unconfirmed_text != "":
-            sentences.append(("", self.unconfirmed_text, False))
+        if not added_unconfirmed and self.unconfirmed_text !="":
+            unc = self.Sentence(
+                text=self.unconfirmed_text,
+                tokens=unc_tokens
+            )
+            sentences.append((Translator.Sentence(), unc, False))
 
         return sentences
 
-    def translate_and_send(self, text: tuple[str, str, bool]):
-        confirmed_text, unconfirmed_text, complete = text
+    @classmethod
+    def _compute_diff_ops(
+        cls,
+        prev_text: list[Token],
+        curr_text: list[Token],
+        include_inserts: bool = True,
+        include_middle_inserts: bool = True,
+        include_trailing_inserts: bool = True,
+    ) -> list[dict]:
+        curr_offsets = [token.idx for token in curr_text]
+        prev = [token.text for token in prev_text]
+        curr = [token.text for token in curr_text]
+
+        from difflib import SequenceMatcher
+        matcher = SequenceMatcher(a=prev, b=curr, autojunk=False)
+        ops: list[dict] = []
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            match tag:
+                case "insert":
+                    if not include_inserts:
+                        continue
+
+                    is_trailing_insert = (i1 == i2 == len(prev)) and (j2 == len(curr))
+                    if is_trailing_insert and not include_trailing_inserts:
+                        continue
+                    if not is_trailing_insert and not include_middle_inserts:
+                        continue
+
+                    start = curr_offsets[j1]
+                    end = curr_offsets[j2 - 1] + len(curr_text[j2 - 1].text)
+                    ops.append({"op": "+", "span": [start, end]})
+
+                case "delete":
+                    if not curr_text:
+                        idx = 0
+                    elif j1 == 0:
+                        idx = curr_offsets[0]
+                    elif j1 >= len(curr_text):
+                        idx = curr_offsets[-1] + len(curr_text[-1].text)
+                    else:
+                        idx = curr_offsets[j1 - 1] + len(curr_text[j1 - 1].text)
+                    ops.append({"op": "-", "idx": idx})
+
+                case "replace":
+                    start = curr_offsets[j1]
+                    end = curr_offsets[j2 - 1] + len(curr_text[j2 - 1].text)
+                    ops.append({"op": "~", "span": [start, end]})
+
+        return ops
+
+    def _compute_source_diff_ops(self, confirmed_text: str, unconfirmed_text: str, complete: bool) -> list[dict]:
+        if self._prev_source_unconf_tokens or not complete:
+            full_doc = self.src_nlp(confirmed_text + unconfirmed_text)
+            full_tokens: list[Token] = [token for token in full_doc]
+
+        if self._prev_source_unconf_tokens:
+            start = min(self._prev_source_conf_tok_count, len(full_tokens))
+            end = min(start + len(self._prev_source_unconf_tokens), len(full_tokens))
+            new_cmp_tokens = full_tokens[start:end]
+            diff_ops = self._compute_diff_ops(
+                self._prev_source_unconf_tokens,
+                new_cmp_tokens,
+                include_inserts=True,
+                include_middle_inserts=True,
+                include_trailing_inserts=True,
+            )
+        else:
+            diff_ops: list[dict] = []
+
+        if complete:
+            self._prev_source_conf_tok_count = 0
+            self._prev_source_unconf_tokens = []
+        else:
+            conf_doc = self.src_nlp(confirmed_text)
+            conf_tok_count = len(conf_doc)
+
+            self._prev_source_conf_tok_count = conf_tok_count
+            self._prev_source_unconf_tokens = full_tokens[conf_tok_count:]
+
+        return diff_ops
+
+    def _compute_target_diff_ops(self, transl_text: str, complete: bool) -> list[dict]:
+        if self._prev_target_tokens or not complete:
+            doc = self.dest_nlp(transl_text)
+            transl_text_tokens: list[Token] = []
+            for sent in doc.sents:
+                transl_text_tokens += [token for token in sent]
+
+        if self._prev_target_tokens:
+            diff_ops = self._compute_diff_ops(
+                self._prev_target_tokens,
+                transl_text_tokens,
+                include_inserts=True,
+                include_middle_inserts=True,
+                include_trailing_inserts=complete,
+            )
+        else:
+            diff_ops: list[dict] = []
+
+        if complete:
+            self._prev_target_tokens = []
+        else:
+            self._prev_target_tokens = transl_text_tokens
+
+        return diff_ops
+
+    def translate_and_send(self, sentence: tuple[Sentence, Sentence, bool]):
+        confirmed, unconfirmed, complete = sentence
+        unconfirmed_text = unconfirmed.text
+        if not confirmed:
+            unconfirmed_text = unconfirmed_text.lstrip()
+
+        if self.source_diff_enabled:
+            source_diff_ops = self._compute_source_diff_ops(confirmed.text, unconfirmed_text, complete)
+        else:
+            source_diff_ops = []
         text_id = self._resolve_text_id(complete)
 
         for out_q in self.output_queues.copy():
@@ -124,8 +293,9 @@ class Translator:
                 {
                     "id": text_id,
                     "src_lang": self.src_lang_code,
-                    "orig_text": confirmed_text,
+                    "orig_text": confirmed.text,
                     "orig_unconfirmed_text": unconfirmed_text,
+                    "source_diff": source_diff_ops,
                     "complete": complete,
                 }
             )
@@ -134,7 +304,7 @@ class Translator:
             self.translation_queue.put(
                 {
                     "id": text_id,
-                    "text": confirmed_text + unconfirmed_text,
+                    "text": confirmed.text + unconfirmed_text,
                     "complete": complete,
                 }
             )
@@ -175,6 +345,13 @@ class Translator:
                 logger.error(f"[Translator] {e}")
                 continue
 
+            complete = job.get("complete", True)
+
+            if self.target_diff_enabled:
+                target_diff_ops = self._compute_target_diff_ops(transl_text, complete)
+            else:
+                target_diff_ops = []
+
             self.sender_queue.put(
                 {
                     "type": "statistics",
@@ -190,7 +367,8 @@ class Translator:
                         "id": job["id"],
                         "target_lang": self.target_lang_code,
                         "transl_text": transl_text,
-                        "complete": job.get("complete", True),
+                        "target_diff": target_diff_ops,
+                        "complete": complete,
                     }
                 )
 
@@ -217,6 +395,9 @@ class Translator:
             self.is_running = False
             self.transl_ready_event = None
             self.shutdown_event = None
+            self._prev_source_conf_tok_count = 0
+            self._prev_source_unconf_tokens.clear()
+            self._prev_target_tokens.clear()
 
     def initialize_engine(self):
         self.engine = None
@@ -270,7 +451,7 @@ class Translator:
                 first_msg = False
 
             sentences = self.get_sentences()
-            self._send_buffered_text_stats()
+            self._send_buffered_text_stats(sentences)
 
             for to_translate in sentences:
                 self.translate_and_send(to_translate)

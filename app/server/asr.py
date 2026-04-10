@@ -5,9 +5,6 @@ from pathlib import Path
 from app.common.utils import MPCountingQueue
 
 
-logger = logging.getLogger(__name__)
-
-
 class WhisperServerParams:
     def __init__(self):
         # Zoom URL

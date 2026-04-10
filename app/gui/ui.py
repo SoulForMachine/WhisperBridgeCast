@@ -338,6 +338,15 @@ class CaptionerUI:
         self.transl_word_increment_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
+        ttk.Label(translation_tab, text="Send diff:").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        self.source_diff_enabled_var = tk.BooleanVar(value=False)
+        self.source_diff_enabled_check = ttk.Checkbutton(translation_tab, text="source", variable=self.source_diff_enabled_var)
+        self.source_diff_enabled_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        self.target_diff_enabled_var = tk.BooleanVar(value=True)
+        self.target_diff_enabled_check = ttk.Checkbutton(translation_tab, text="target", variable=self.target_diff_enabled_var)
+        self.target_diff_enabled_check.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(translation_tab)
         translation_tab.grid_columnconfigure(2, weight=1)
         self.engine_params_frame = ttk.Frame(translation_tab, padding=10)
         self.engine_params_frame.grid(row=row_idx, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
@@ -595,7 +604,7 @@ class CaptionerUI:
         net_server_transl_status_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         self.net_server_transl_queue_progress = ttk.Progressbar(stats_frame, orient="horizontal", mode="determinate", maximum=100, value=0)
         self.net_server_transl_queue_progress.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.net_server_transl_queue_label = ttk.Label(stats_frame, text="words buffered: --", width=20)
+        self.net_server_transl_queue_label = ttk.Label(stats_frame, text="tokens buffered: --", width=20)
         self.net_server_transl_queue_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(stats_frame)
         net_server_transl_proc_t_label = ttk.Label(stats_frame, text="Inference time:")
@@ -734,11 +743,13 @@ class CaptionerUI:
         if self.enable_translation_var.get():
             self.target_lang_combo.config(state="readonly")
             self.transl_engine_combo.config(state="readonly")
+            self.target_diff_enabled_check.config(state="normal")
             self.on_transl_engine_selection_change(None)
         else:
             self.target_lang_combo.config(state="disabled")
             self.transl_engine_combo.config(state="disabled")
             self.online_translator_combo.config(state="disabled")
+            self.target_diff_enabled_check.config(state="disabled")
             for w in self.engine_params_frame.winfo_children():
                 w.config(state="disabled")
 
@@ -961,7 +972,7 @@ class CaptionerUI:
         self.net_server_asr_proc_t_roll_avg_label.config(text="roll avg: --")
         self.net_server_asr_proc_t_graph.clear()
         self.net_server_transl_queue_progress.config(value=0)
-        self.net_server_transl_queue_label.config(text="words buffered: --")
+        self.net_server_transl_queue_label.config(text="tokens buffered: --")
         self.net_server_transl_proc_t_label.config(text="last: --")
         self.net_server_transl_proc_t_min_label.config(text="min: --")
         self.net_server_transl_proc_t_max_label.config(text="max: --")
@@ -1048,6 +1059,8 @@ class CaptionerUI:
                 return False
 
         transl_params["word_increment"] = self.transl_word_increment_var.get()
+        transl_params["source_diff_enabled"] = bool(self.source_diff_enabled_var.get())
+        transl_params["target_diff_enabled"] = bool(self.target_diff_enabled_var.get())
 
         info_str = (
             f"Connecting to server at {server_url}:{port} with parameters:\n"
@@ -1218,10 +1231,10 @@ class CaptionerUI:
                                 self.net_server_asr_in_queue_progress.config(value=min(stat_value, 10))
                                 self.net_server_asr_in_queue_label.config(text=f"chunks queued: {stat_value}")
                             self.gui_queue.put(upd_asr_q_size)
-                        case "transl_buffer_word_count":
+                        case "transl_buffer_token_count":
                             def upd_transl_q_size(stat_value=stat_value):
                                 self.net_server_transl_queue_progress.config(value=min(stat_value, 100))
-                                self.net_server_transl_queue_label.config(text=f"words buffered: {stat_value}")
+                                self.net_server_transl_queue_label.config(text=f"tokens buffered: {stat_value}")
                             self.gui_queue.put(upd_transl_q_size)
                         case "last_asr_proc_time":
                             def upd_asr_proc_time(stat_value=stat_value):

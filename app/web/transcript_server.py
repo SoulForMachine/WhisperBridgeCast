@@ -168,6 +168,11 @@ class WebTranscriptServer:
         if "target_lang" in message:
           event["target_lang"] = message.get("target_lang")
 
+        if "source_diff" in message:
+            event["source_diff"] = message.get("source_diff")
+        if "target_diff" in message:
+            event["target_diff"] = message.get("target_diff")
+
         self._send_event(event)
 
     def _make_handler(self):

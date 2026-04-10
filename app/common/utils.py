@@ -17,6 +17,10 @@ def str_to_int(s):
         return None, False  # invalid int
 
 
+def clamp(value, min_value, max_value):
+    return max(min_value, min(value, max_value))
+
+
 class MPCountingQueue:
     def __init__(self):
         self.q = mp.Queue()
@@ -37,4 +41,4 @@ class MPCountingQueue:
         return self.counter.value
 
 
-__all__ = ["str_to_float", "str_to_int", "MPCountingQueue"]
+__all__ = ["str_to_float", "str_to_int", "MPCountingQueue", "clamp"]

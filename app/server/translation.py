@@ -1,9 +1,12 @@
+from __future__ import annotations
 import logging
 import multiprocessing as mp
 import queue
 import threading
-import spacy
-from spacy.tokens import Token
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from spacy.tokens import Token
 
 from app.server.transl_backends import (
     TranslBase,
@@ -58,6 +61,7 @@ class Translator:
         self._prev_source_unconf_tokens: list[Token] = []
         self._prev_target_tokens: list[Token] = []
 
+        import spacy
         self.src_nlp = spacy.blank(self.src_lang_code)
         self.src_nlp.add_pipe("sentencizer")
 

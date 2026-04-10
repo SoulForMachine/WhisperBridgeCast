@@ -67,48 +67,23 @@ class Translator:
     FLUSH_TIMEOUT = 6
 
     class Sentence:
-        def __init__(self, text: str = "", tokens: list[Token] = []):
-            self.text = text
-            self.tokens = tokens
+        def __init__(self, confirmed: str = "", unconfirmed: str = "", num_tokens: int = 0, num_conf_tokens: int = 0, complete: bool = False):
+            self.confirmed = confirmed
+            self.unconfirmed = unconfirmed
+            self.num_tokens = num_tokens
+            self.num_conf_tokens = num_conf_tokens
+            self.complete = complete
 
         def __bool__(self):
-            return bool(self.text.strip()) and bool(self.tokens)
+            return bool(self.confirmed.strip()) or bool(self.unconfirmed.strip())
 
-        def is_sentence_complete(self, next_tokens: list[Token]) -> bool:
-            if not self.tokens:
-                return False
-
-            last = self.tokens[-1]
-
-            # 1. Must end with standalone punctuation
-            if not (last.is_punct and last.text in (".", "!", "?")):
-                return False
-
-            # 2. Reject abbreviations like "Dr."
-            # (those are not split into "." token)
-            if not last.is_punct and last.text.endswith("."):
-                return False
-
-            # 3. Lookahead: skip punctuation
-            i = 0
-            while i < len(next_tokens) and next_tokens[i].is_punct:
-                i += 1
-
-            if i < len(next_tokens):
-                tok = next_tokens[i]
-
-                if tok.is_lower or tok.like_num:
-                    return False
-
-            return True
-
-    def _send_buffered_text_stats(self, sentences: list[tuple[Sentence, Sentence, bool]]):
+    def _send_buffered_text_stats(self, sentences: list[Sentence]):
         # We send the token count of the last uncomplete sentence, that is token count of
         # the buffered confirmed + unconfirmed text.
         buf_token_count = 0
         if sentences:
-            conf, unconf, complete = sentences[-1]
-            buf_token_count = len(conf.tokens) + len(unconf.tokens) if not complete else 0
+            last_sent = sentences[-1]
+            buf_token_count = last_sent.num_tokens if not last_sent.complete else 0
 
         self.sender_queue.put(
             {
@@ -124,48 +99,73 @@ class Translator:
         self.confirmed_text += confirmed
         self.unconfirmed_text = unconfirmed
 
-    def get_sentences(self) -> list[tuple[Sentence, Sentence, bool]]:
-        doc = self.src_nlp(self.confirmed_text)
-        doc_unc = self.src_nlp(self.unconfirmed_text)
+    def get_sentences(self) -> list[Sentence]:
+        doc_c = self.src_nlp(self.confirmed_text)
+        doc_cu = self.src_nlp(self.confirmed_text + self.unconfirmed_text)
 
-        def fix_sent(text):
-            text = text.strip()
+        def fix_sent(text: str) -> str:
+            # Strip leading whitespace and capitalize first letter of the sentence.
+            text = text.lstrip()
             text = text[:1].upper() + text[1:] if text else text
             return text
 
-        sentences: list[tuple[Translator.Sentence, Translator.Sentence, bool]] = []
-        for sent in doc.sents:
+        sentences: list[Translator.Sentence] = []
+        cf_sentences_tokens: list[Token] = []
+        for sent in doc_c.sents:
+            tokens = [t for t in sent]
+            cf_sentences_tokens.append(tokens)
             s = self.Sentence(
-                text=fix_sent(sent.text),
-                tokens=[token for token in sent]
+                confirmed=fix_sent(sent.text),
+                unconfirmed="",
+                num_tokens=len(tokens),
+                num_conf_tokens=len(tokens),
+                complete=True
             )
-            sentences.append((s, Translator.Sentence(), True))
+            sentences.append(s)
 
-        unc_tokens = []
-        for sent in doc_unc.sents:
-            unc_tokens.extend([token for token in sent])
+        cf_uncf_sentences_tokens: list[Token] = []
+        for sent in doc_cu.sents:
+            cf_uncf_sentences_tokens.append([t for t in sent])
 
         added_unconfirmed = False
         if sentences:
-            last_sent = sentences[-1][0]
-            if not last_sent.is_sentence_complete(unc_tokens):
-                # last sentence is partial
-                unc = Translator.Sentence(
-                    text=self.unconfirmed_text,
-                    tokens=unc_tokens
+            last_cf_sent = sentences[-1]
+            cf_toks = [t.text for t in cf_sentences_tokens[-1]]
+            last_idx = len(sentences) - 1
+            assert last_idx < len(cf_uncf_sentences_tokens)
+            cu_sent_tokens = cf_uncf_sentences_tokens[last_idx]
+            cu_toks = [t.text for t in cu_sent_tokens]
+
+            if cf_toks != cu_toks:
+                # last sentence is partial, add the unconfirmed part as well and mark the sentence as incomplete
+                cf_uncf_sent = self.Sentence(
+                    confirmed=last_cf_sent.confirmed,
+                    unconfirmed=self.unconfirmed_text,
+                    num_tokens=len(cu_sent_tokens),
+                    num_conf_tokens=last_cf_sent.num_conf_tokens,
+                    complete=False
                 )
-                sentences[-1] = (last_sent, unc, False)
-                self.confirmed_text = last_sent.text
+                sentences[-1] = cf_uncf_sent
+                self.confirmed_text = last_cf_sent.confirmed
                 added_unconfirmed = True
             else:
+                # since the last sentence is complete, we clear the confirmed text buffer
                 self.confirmed_text = ""
 
         if not added_unconfirmed and self.unconfirmed_text !="":
-            unc = self.Sentence(
-                text=self.unconfirmed_text,
-                tokens=unc_tokens
+            # The unconfirmed text isn't added either because there are no complete senteces or because the last sentence is complete.
+            # In both cases we add the unconfirmed text as a separate incomplete sentence.
+            unconfirmed_text = self.unconfirmed_text.lstrip()
+            unc_doc = self.src_nlp(unconfirmed_text)
+            unc_tokens = [t for t in unc_doc]
+            unc_sent = self.Sentence(
+                confirmed="",
+                unconfirmed=unconfirmed_text,
+                num_tokens=len(unc_tokens),
+                num_conf_tokens=0,
+                complete=False
             )
-            sentences.append((Translator.Sentence(), unc, False))
+            sentences.append(unc_sent)
 
         return sentences
 
@@ -220,10 +220,10 @@ class Translator:
 
         return ops
 
-    def _compute_source_diff_ops(self, confirmed_text: str, unconfirmed_text: str, complete: bool) -> list[dict]:
-        if self._prev_source_unconf_tokens or not complete:
-            full_doc = self.src_nlp(confirmed_text + unconfirmed_text)
-            full_tokens: list[Token] = [token for token in full_doc]
+    def _compute_source_diff_ops(self, cur_sent: Sentence) -> list[dict]:
+        if self._prev_source_unconf_tokens or not cur_sent.complete:
+            doc = self.src_nlp(cur_sent.confirmed + cur_sent.unconfirmed)
+            full_tokens = [t for t in doc]
 
         if self._prev_source_unconf_tokens:
             start = min(self._prev_source_conf_tok_count, len(full_tokens))
@@ -239,13 +239,11 @@ class Translator:
         else:
             diff_ops: list[dict] = []
 
-        if complete:
+        if cur_sent.complete:
             self._prev_source_conf_tok_count = 0
             self._prev_source_unconf_tokens = []
         else:
-            conf_doc = self.src_nlp(confirmed_text)
-            conf_tok_count = len(conf_doc)
-
+            conf_tok_count = cur_sent.num_conf_tokens
             self._prev_source_conf_tok_count = conf_tok_count
             self._prev_source_unconf_tokens = full_tokens[conf_tok_count:]
 
@@ -254,9 +252,7 @@ class Translator:
     def _compute_target_diff_ops(self, transl_text: str, complete: bool) -> list[dict]:
         if self._prev_target_tokens or not complete:
             doc = self.dest_nlp(transl_text)
-            transl_text_tokens: list[Token] = []
-            for sent in doc.sents:
-                transl_text_tokens += [token for token in sent]
+            transl_text_tokens = [t for t in doc]
 
         if self._prev_target_tokens:
             diff_ops = self._compute_diff_ops(
@@ -276,14 +272,13 @@ class Translator:
 
         return diff_ops
 
-    def translate_and_send(self, sentence: tuple[Sentence, Sentence, bool]):
-        confirmed, unconfirmed, complete = sentence
-        unconfirmed_text = unconfirmed.text
-        if not confirmed:
-            unconfirmed_text = unconfirmed_text.lstrip()
+    def translate_and_send(self, sentence: Sentence):
+        confirmed = sentence.confirmed
+        unconfirmed = sentence.unconfirmed
+        complete = sentence.complete
 
         if self.source_diff_enabled:
-            source_diff_ops = self._compute_source_diff_ops(confirmed.text, unconfirmed_text, complete)
+            source_diff_ops = self._compute_source_diff_ops(sentence)
         else:
             source_diff_ops = []
         text_id = self._resolve_text_id(complete)
@@ -293,8 +288,8 @@ class Translator:
                 {
                     "id": text_id,
                     "src_lang": self.src_lang_code,
-                    "orig_text": confirmed.text,
-                    "orig_unconfirmed_text": unconfirmed_text,
+                    "orig_text": confirmed,
+                    "orig_unconfirmed_text": unconfirmed,
                     "source_diff": source_diff_ops,
                     "complete": complete,
                 }
@@ -304,7 +299,7 @@ class Translator:
             self.translation_queue.put(
                 {
                     "id": text_id,
-                    "text": confirmed.text + unconfirmed_text,
+                    "text": confirmed + unconfirmed,
                     "complete": complete,
                 }
             )

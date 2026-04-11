@@ -48,11 +48,9 @@ x Reorganize client and server code into multiple files.
 ## Less important functionality
 
 x Updates of partially translated sentences should be clearly marked with visual feedback.
+x (solved with spacy) Change is_sentence_complete() to include cases like passed sent ending in Dr. etc.
 - Option to save transcript to a file and to view those transcripts from web interface.
 - Transcript and audio file writing options should be sent by the client.
-- Query the server for supported whisper and translation models.
-- The client should be able to send updated individual settings or restart parts of the server pipeline.
-- Change is_sentence_complete() to include cases like passed sent ending in Dr. etc.
 - Solve the problem of asr process not getting audio chunks which stops updates to asr processor and sending statistics to the client.
     x The client should send a chunk of silence when loopback device is used and streaming has stopped for an interval.
     + Alternatively, wake up when no new chunks arrive in the ASR thread and flush with a couple of seconds of silence, then wait indefinitely on queue.
@@ -69,7 +67,8 @@ x Try out googletrans and deep_traslator libraries for free online translation s
 x Allow for the client to dynamically adjust the audio chunk size, or use smaller chunks and adjust the minimal asr processor chunk size.
 x Allow the user to enable/disable original language transcript in web server.
 - Starting the server pipeline separatly from UI.
-- After connection is established, server should send to client all available translation backends info: engine, online service, supported languages, needed parameters...
+- After connection is established, server should send to client all available ASR and translation backends info: engine, models, online service, supported languages, needed parameters...
+- The client should be able to send updated individual settings or restart parts of the server pipeline.
 - Use slower but better translation in a second pass?
 - Add padding from the next audio chunk if necessary for requested length.
 - Start transcription inference asynchronously, so chunks can be processed one by one.

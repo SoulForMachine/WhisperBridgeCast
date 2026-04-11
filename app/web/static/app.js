@@ -19,6 +19,7 @@ function isPunctuationChar(ch) {
 }
 
 function pickRemovalMarkerIndex(text, idx) {
+  idx = clamp(idx, 0, text.length - 1);
   if (isPunctuationChar(text[idx])) {
     return idx;
   }

@@ -401,6 +401,63 @@ def test_compute_diff_ops_replace_span_boundaries_with_punctuation() -> None:
         assert 0 <= start < end <= len(curr_text_2)
 
 
+def test_compute_diff_ops_messages2_edge_case_deletions_match_expected_log() -> None:
+    tr, _ = _build_translator(source_diff_enabled=False)
+    nlp = tr.src_nlp
+
+    messages: list[tuple[str, str, bool]] = [
+        ("", "Hello new world", False),
+        ("Hello world", "", True),
+        ("", "Hello world one.", False),
+        ("Hello world.", "", True),
+        ("", "Say Hello world.", False),
+        ("Hello world.", "", True),
+        ("", "Hello world two", False),
+        ("Hello world.", "", True),
+        ("", "Hello world three", False),
+        ("Hello world", "", True),
+    ]
+
+    expected_ops: list[list[dict]] = [
+        [{"op": "+", "span": [0, 15]}],
+        [{"op": "-", "idx": 5}],
+        [{"op": "+", "span": [0, 16]}],
+        [{"op": "-", "idx": 11}],
+        [{"op": "+", "span": [0, 16]}],
+        [{"op": "-", "idx": 0}],
+        [{"op": "+", "span": [0, 15]}],
+        [{"op": "~", "span": [11, 12]}],
+        [{"op": "+", "span": [0, 17]}],
+        [{"op": "-", "idx": 11}],
+    ]
+
+    old_cf = ""
+    old_uncf = ""
+    observed_ops: list[list[dict]] = []
+
+    for confirmed, unconfirmed, complete in messages:
+        old_tokens = [tok for tok in nlp(old_cf + old_uncf)]
+        new_tokens = [tok for tok in nlp(confirmed + unconfirmed)]
+        observed_ops.append(Translator._compute_diff_ops(old_tokens, new_tokens))
+
+        if complete:
+            old_cf = ""
+            old_uncf = ""
+        else:
+            old_cf = confirmed
+            old_uncf = unconfirmed
+
+    assert observed_ops == expected_ops
+
+    delete_indices = [
+        op["idx"]
+        for ops in observed_ops
+        for op in ops
+        if op.get("op") == "-"
+    ]
+    assert delete_indices == [5, 11, 0, 11]
+
+
 def test_source_diff_state_resets_after_complete() -> None:
     tr, _ = _build_translator(source_diff_enabled=True)
     nlp = tr.src_nlp

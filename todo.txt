@@ -1,0 +1,81 @@
+
+x Overlay display scrolling doesn't remove the last scrolled line if it overhangs into the visible area.
+x Separate the code into a client app which does input and output, and the processing server.
+x Implement source and target language setting, disabling translation, etc.
+x (no) There should be a minimum (and maybe maximum) time that a sentence is displayed on the overlay.
+x (fixed with spacy) Skip when punctuation only generated (as in .....).
+x (fixed with spacy) Handle situations where fullstops aren't used for sentence end, like in 'e.g.'.
+x The overlay window should resize (or not) so that the text doesn't jump around when changed.
+x Sort out the multithreading/networking init/shutdown mess.
+x Remove warmup file option from the client, not needed.
+x Add latency [s] option which determines the audio blocksize.
+x There are some thread objs that are outside of associated classes in gui.
+x Fix the situation where the client connects to the server but fails to run the audio listener or captions receiver.
+x Separate startup of AudioListener and WhisperClient. Check if Whisper expects a continous stream.
+x Check if pipeline element startup order is bottom to top, and vice versa for shutdown.
+x Debug this partial and whole text:
+    "The prospective group member is assessing the therapist as much as"
+    "The prospective group member is assessing the therapist as much as the other way around."
+    + The bug is manifest when multiple sentences are added in quick succession - this is the problem with scrolling.
+x Do not translate partial sentences after each new text piece. Wait for at least a certain length or a timeout.
+x When translation is off, just pass the text as it arrives.
+x Use spacy or similar to split the text into sentences.
+x (doesn't matter) Fix main process args appearing in the whisper_online subprocess.
+x The server should wait for everything to start up before notifying the client with "ready" status.
+x We need to handle the situation where the client is disconnected from the server while streaming audio.
+x The line of text which scrolled out of the overlay still isn't removed if the text spans multiple lines.
+x Bug: client UI isn't properly updated after an unsuccessful connection attempt.
+x The AudioMixer is broken, there are gaps in audio. Use a "switcher" instead.
+x Add a status display in the GUI for client-server connection, audio device status, etc.
+
+## Bugs
+x listen_for_results stop_event logic sometimes makes it exit early
+
+## UI
+
+- Add status indicators for the 2 audio streams.
+- Add rescan button to refresh the audio device list.
+- Save gui settings to a file. Add restore default button.
+- What if the start of a wrapped line that has scrolled out of the overlay is changed?
+
+## Refactoring
+
+x Reorganize client and server code into multiple files.
+- Separate init/deinit code from UI update code in functions like on_disconnect_from_server().
+- Think about a common class for 'pipeline components', which has a run() function that is run in a thread managed by that base class. Maybe just WorkerThread.
+- Refactor code and naming: whisper_streamer.py, WhisperServerParams, WhisperOnline.
+
+## Less important functionality
+
+x Updates of partially translated sentences should be clearly marked with visual feedback.
+- Option to save transcript to a file and to view those transcripts from web interface.
+- Transcript and audio file writing options should be sent by the client.
+- Query the server for supported whisper and translation models.
+- The client should be able to send updated individual settings or restart parts of the server pipeline.
+- Change is_sentence_complete() to include cases like passed sent ending in Dr. etc.
+- Solve the problem of asr process not getting audio chunks which stops updates to asr processor and sending statistics to the client.
+    x The client should send a chunk of silence when loopback device is used and streaming has stopped for an interval.
+    + Alternatively, wake up when no new chunks arrive in the ASR thread and flush with a couple of seconds of silence, then wait indefinitely on queue.
+
+## Important functionality
+
+x (no need - FixedVADIterator params fixes dropped words) Audio chunks should overlap by a configurable time length (this should be done in the server - check what whisper_online does currently).
+x (not possible) Try translation with configurable extended context (say prepend previous sentence). Check what context options MarianMT has.
+x Empty the server queues on shutdown since processing the remaining data isn't necessary.
+x Control from UI the word increment after which the text is sent to translation.
+x Add punctuation after last confirmed text when silence is detected instead of flush timeout in Translator.
+x Do not wait for translation to complete before sending the original text. Use sentence ids to identify sentences.
+x Try out googletrans and deep_traslator libraries for free online translation services.
+x Allow for the client to dynamically adjust the audio chunk size, or use smaller chunks and adjust the minimal asr processor chunk size.
+x Allow the user to enable/disable original language transcript in web server.
+- Starting the server pipeline separatly from UI.
+- After connection is established, server should send to client all available translation backends info: engine, online service, supported languages, needed parameters...
+- Use slower but better translation in a second pass?
+- Add padding from the next audio chunk if necessary for requested length.
+- Start transcription inference asynchronously, so chunks can be processed one by one.
+- Send sentence audio timestamp to all consumers.
+- Retranslate partial sentences after certain number of words added; or don't and just remove word_increment. (related to sending transcript and translation separatly)
+- See what can be done about unconfirmed text that span two sentences, like in:
+    INFO    [ASR]  |  shockwave through the world. And of course, one can always say, okay, Iran is there
+- If translation processing is slow there might be multiple jobs of the same partial sentence queued. Try skipping unnecessary ones.
+- Whisper sometimes alternates between two words in consecutive inferences. Try preventing stalling confirmation by picking the word with greater probability.

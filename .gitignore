@@ -30,4 +30,4 @@ scafolding/
 *.tmp
 *.bak
 *.swp
-todo.txt
+.aider*

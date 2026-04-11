@@ -339,7 +339,7 @@ class CaptionerUI:
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Send diff:").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.source_diff_enabled_var = tk.BooleanVar(value=False)
+        self.source_diff_enabled_var = tk.BooleanVar(value=True)
         self.source_diff_enabled_check = ttk.Checkbutton(translation_tab, text="source", variable=self.source_diff_enabled_var)
         self.source_diff_enabled_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
         self.target_diff_enabled_var = tk.BooleanVar(value=True)

@@ -3,6 +3,7 @@ import mimetypes
 import threading
 import time
 import queue
+from collections import OrderedDict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,8 +47,8 @@ class WebTranscriptServer:
         # SSE event id must be monotonic for Last-Event-ID resuming.
         self._event_counter = 0
 
-        # Keep a small backlog so newcomers see recent lines.
-        self._history: list[dict] = []
+        # Keep latest snapshot per entry for replay to reconnecting clients.
+        self._entry_snapshots: OrderedDict[object, dict] = OrderedDict()
         self._history_limit = 500
 
         static_dir = Path(__file__).parent / "static"
@@ -111,7 +112,7 @@ class WebTranscriptServer:
         self._httpd = None
         self._server_thread = None
         self._shutdown.clear()
-        self._history.clear()
+        self._entry_snapshots.clear()
         self._event_counter = 0
 
     def wait_until_ready(self):
@@ -236,8 +237,10 @@ class WebTranscriptServer:
                 client_q: queue.Queue = queue.Queue()
                 server._register_client(client_q)
 
-                # Send backlog first so newcomers see something immediately.
-                for event in server._history:
+                # Send latest per-entry snapshots first.
+                with server._lock:
+                    replay_events = list(server._entry_snapshots.values())
+                for event in replay_events:
                     if event["id"] <= last_id:
                         continue
                     if not self._write_event(event):
@@ -290,9 +293,24 @@ class WebTranscriptServer:
 
     def _send_event(self, event: dict):
         with self._lock:
-            self._history.append(event)
-            if len(self._history) > self._history_limit:
-                self._history = self._history[-self._history_limit :]
+            entry_id = event.get("entry_id", event.get("id"))
+
+            # Keep replay state separate so connected clients still receive
+            # the original live event payload.
+            previous = self._entry_snapshots.get(entry_id)
+            snapshot = dict(previous) if previous is not None else {}
+            snapshot.update(event)
+            # Don't include diffs in snapshot since they are not needed for replay.
+            if "source_diff" in snapshot:
+                snapshot["source_diff"] = []
+            if "target_diff" in snapshot:
+                snapshot["target_diff"] = []
+
+            self._entry_snapshots[entry_id] = snapshot
+            self._entry_snapshots.move_to_end(entry_id)
+            while len(self._entry_snapshots) > self._history_limit:
+                self._entry_snapshots.popitem(last=False)
+
             clients = list(self._clients)
 
         for client in clients:

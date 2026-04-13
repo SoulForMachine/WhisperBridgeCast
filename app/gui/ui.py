@@ -142,16 +142,27 @@ class CaptionerUI:
         whisper_tab = ttk.Frame(settings_notebook, padding=10)
         settings_notebook.add(whisper_tab, text="Whisper")
 
+        whisper_notebook = ttk.Notebook(whisper_tab)
+        whisper_notebook.grid(row=0, column=0, sticky="ew")
+        whisper_tab.columnconfigure(0, weight=1)
+
+        whisper_general_tab = ttk.Frame(whisper_notebook, padding=10)
+        whisper_vad_tab = ttk.Frame(whisper_notebook, padding=10)
+        whisper_notebook.add(whisper_general_tab, text="General")
+        whisper_notebook.add(whisper_vad_tab, text="VAD")
+        whisper_general_tab.grid_columnconfigure(1, weight=1)
+        whisper_vad_tab.grid_columnconfigure(1, weight=1)
+
         # === Speech language ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.lang_var = tk.StringVar(value="English")
-        self.lang_combo = ttk.Combobox(whisper_tab, textvariable=self.lang_var, values=["English", "German", "Serbian"], state="readonly")
+        self.lang_combo = ttk.Combobox(whisper_general_tab, textvariable=self.lang_var, values=["English", "German", "Serbian"], state="readonly")
         self.lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper model ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.model_var = tk.StringVar(value="distil-large-v3")
         model_options = [
             "tiny.en", "tiny",
@@ -160,40 +171,40 @@ class CaptionerUI:
             "medium.en", "distil-medium.en", "medium",
             "large-v1", "large-v2", "distil-large-v2", "large-v3", "distil-large-v3", "distil-large-v3.5", "large", "large-v3-turbo", "turbo"
         ]
-        self.model_combo = ttk.Combobox(whisper_tab, textvariable=self.model_var, values=model_options, state="readonly")
+        self.model_combo = ttk.Combobox(whisper_general_tab, textvariable=self.model_var, values=model_options, state="readonly")
         self.model_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper device ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.whisper_device_var = tk.StringVar(value="cuda")
-        self.whisper_device_combo = ttk.Combobox(whisper_tab, textvariable=self.whisper_device_var, values=["cuda", "cpu"], state="readonly")
+        self.whisper_device_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_device_var, values=["cuda", "cpu"], state="readonly")
         self.whisper_device_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper compute type ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.whisper_compute_type_var = tk.StringVar(value="int8")
         dtypes = ["int8", "int8_float16", "float16", "float32"]
-        self.whisper_compute_type_combo = ttk.Combobox(whisper_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
+        self.whisper_compute_type_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
         self.whisper_compute_type_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Non-speech probability threshold ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Non-speech threshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Non-speech threshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.threshold_var = tk.DoubleVar(value=0.9)
-        self.threshold_slider = tk.Scale(whisper_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
+        self.threshold_slider = tk.Scale(whisper_general_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
                                          command=lambda val: self.threshold_label.config(text=f"{float(val):.2f}"))
         self.threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.threshold_label = ttk.Label(whisper_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
+        self.threshold_label = ttk.Label(whisper_general_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
         self.threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === Buffer trimming ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Buffer trimming").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Buffer trimming").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.buffer_trimming_var = tk.StringVar(value="segment")
         self.buffer_trimming_combo = ttk.Combobox(
-            whisper_tab,
+            whisper_general_tab,
             textvariable=self.buffer_trimming_var,
             values=["segment", "sentence"],
             state="readonly"
@@ -201,11 +212,11 @@ class CaptionerUI:
         self.buffer_trimming_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Buffer trimming time ===
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Buffer trimming time (s)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_general_tab)
+        ttk.Label(whisper_general_tab, text="Buffer trimming time (s)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.buffer_trimming_sec_var = tk.DoubleVar(value=15.0)
         self.buffer_trimming_sec_slider = tk.Scale(
-            whisper_tab,
+            whisper_general_tab,
             from_=5.0,
             to=30.0,
             orient="horizontal",
@@ -215,58 +226,96 @@ class CaptionerUI:
             command=lambda val: self.buffer_trimming_sec_label.config(text=f"{float(val):.1f}")
         )
         self.buffer_trimming_sec_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.buffer_trimming_sec_label = ttk.Label(whisper_tab, text=f"{self.buffer_trimming_sec_var.get():.1f}", width=5, relief="flat", anchor="center")
+        self.buffer_trimming_sec_label = ttk.Label(whisper_general_tab, text=f"{self.buffer_trimming_sec_var.get():.1f}", width=5, relief="flat", anchor="center")
         self.buffer_trimming_sec_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === VAD/VAC ===
-        row_idx = self.next_row(whisper_tab)
+        row_idx = self.next_row(whisper_vad_tab)
         self.vac_var = tk.BooleanVar(value=True)
-        self.vac_check = ttk.Checkbutton(whisper_tab, text="Voice activity controller", variable=self.vac_var)
+        self.vac_check = ttk.Checkbutton(whisper_vad_tab, text="Voice activity controller", variable=self.vac_var)
         self.vac_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_var = tk.BooleanVar(value=False)
+        self.vad_check = ttk.Checkbutton(whisper_vad_tab, text="Whisper's internal VAD", variable=self.vad_var)
+        self.vad_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
         self.vac_min_chunk_size_var = tk.DoubleVar(value=1.2)
-        self.vac_min_chunk_size_slider = tk.Scale(whisper_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
+        self.vac_min_chunk_size_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
                                                   command=lambda val: self.vac_min_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vac_min_chunk_size_label = ttk.Label(whisper_tab, text=f"{self.vac_min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.vac_min_chunk_size_label = ttk.Label(whisper_vad_tab, text=f"{self.vac_min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
         self.vac_min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
-        self.vac_dynamic_chunk_size_var = tk.BooleanVar(value=True)
-        self.vac_dynamic_chunk_size_check = ttk.Checkbutton(whisper_tab, text="Dynamic", variable=self.vac_dynamic_chunk_size_var)
-        self.vac_dynamic_chunk_size_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
+        self.vac_is_dynamic_chunk_size_var = tk.BooleanVar(value=True)
+        self.vac_is_dynamic_chunk_size_check = ttk.Checkbutton(whisper_vad_tab, text="Dynamic", variable=self.vac_is_dynamic_chunk_size_var)
+        self.vac_is_dynamic_chunk_size_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="VAD threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_threshold_var = tk.DoubleVar(value=0.5)
-        self.vad_threshold_slider = tk.Scale(whisper_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_threshold_var,
-                                         command=lambda val: self.vad_threshold_label.config(text=f"{float(val):.2f}"))
-        self.vad_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_threshold_label = ttk.Label(whisper_tab, text=f"{self.vad_threshold_var.get()}", width=5, relief="flat", anchor="center")
-        self.vad_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Speech start threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_start_threshold_var = tk.DoubleVar(value=0.4)
+        def start_threshold_slider_cmd(val):
+            low_val = self.vad_end_threshold_var.get()
+            if float(val) < low_val:
+                self.vad_start_threshold_var.set(low_val)
+                val = low_val
+            self.vad_start_threshold_label.config(text=f"{float(val):.2f}")
+        self.vad_start_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_start_threshold_var,
+                                                   command=start_threshold_slider_cmd)
+        self.vad_start_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_start_threshold_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_start_threshold_var.get():.2f}", width=5, relief="flat", anchor="center")
+        self.vad_start_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="VAD min. silence (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_min_silence_duration_var = tk.DoubleVar(value=1.0)
-        self.vad_min_silence_duration_slider = tk.Scale(whisper_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vad_min_silence_duration_var,
-                                              command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Speech end threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_end_threshold_var = tk.DoubleVar(value=0.25)
+        def end_threshold_slider_cmd(val):
+            high_val = self.vad_start_threshold_var.get()
+            if float(val) > high_val:
+                self.vad_end_threshold_var.set(high_val)
+                val = high_val
+            self.vad_end_threshold_label.config(text=f"{float(val):.2f}")
+        self.vad_end_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_end_threshold_var,
+                                                 command=end_threshold_slider_cmd)
+        self.vad_end_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_end_threshold_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_end_threshold_var.get():.2f}", width=5, relief="flat", anchor="center")
+        self.vad_end_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Min. silence duration (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_min_silence_duration_var = tk.DoubleVar(value=0.4)
+        self.vad_min_silence_duration_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_min_silence_duration_var,
+                                                        command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
         self.vad_min_silence_duration_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_min_silence_duration_label = ttk.Label(whisper_tab, text=f"{self.vad_min_silence_duration_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_min_silence_duration_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_min_silence_duration_var.get()}", width=5, relief="flat", anchor="center")
         self.vad_min_silence_duration_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(whisper_tab)
-        ttk.Label(whisper_tab, text="Speech pad (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_speech_pad_var = tk.DoubleVar(value=1.1)
-        self.vad_speech_pad_slider = tk.Scale(whisper_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vad_speech_pad_var,
-                                              command=lambda val: self.vad_speech_pad_label.config(text=f"{float(val):.1f}"))
-        self.vad_speech_pad_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_speech_pad_label = ttk.Label(whisper_tab, text=f"{self.vad_speech_pad_var.get()}", width=5, relief="flat", anchor="center")
-        self.vad_speech_pad_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Speech pad start (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_speech_pad_start_var = tk.DoubleVar(value=0.8)
+        self.vad_speech_pad_start_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_start_var,
+                                                    command=lambda val: self.vad_speech_pad_start_label.config(text=f"{float(val):.1f}"))
+        self.vad_speech_pad_start_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_speech_pad_start_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_speech_pad_start_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_speech_pad_start_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
-        row_idx = self.next_row(whisper_tab)
-        self.vad_var = tk.BooleanVar(value=False)
-        self.vad_check = ttk.Checkbutton(whisper_tab, text="Whisper voice activity detection", variable=self.vad_var)
-        self.vad_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Speech pad end (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_speech_pad_end_var = tk.DoubleVar(value=0.9)
+        self.vad_speech_pad_end_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_end_var,
+                                                  command=lambda val: self.vad_speech_pad_end_label.config(text=f"{float(val):.1f}"))
+        self.vad_speech_pad_end_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_speech_pad_end_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_speech_pad_end_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_speech_pad_end_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
+
+        row_idx = self.next_row(whisper_vad_tab)
+        ttk.Label(whisper_vad_tab, text="Hangover chunks").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+        self.vad_hangover_chunks_var = tk.IntVar(value=2)
+        self.vad_hangover_chunks_slider = tk.Scale(whisper_vad_tab, from_=0, to=10, orient="horizontal", resolution=1, showvalue=False, variable=self.vad_hangover_chunks_var,
+                                                   command=lambda val: self.vad_hangover_chunks_label.config(text=f"{int(float(val))}"))
+        self.vad_hangover_chunks_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
+        self.vad_hangover_chunks_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_hangover_chunks_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_hangover_chunks_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # +++ Translation tab +++
         translation_tab = ttk.Frame(settings_notebook, padding=10)
@@ -484,7 +533,7 @@ class CaptionerUI:
         # === Common audio settings ===
         row_idx = self.next_row(audio_tab)
         ttk.Label(audio_tab, text="Audio chunk size (s)").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_chunk_size_var = tk.DoubleVar(value=1.2)
+        self.audio_chunk_size_var = tk.DoubleVar(value=0.4)
         self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.audio_chunk_size_var,
                                                   command=lambda val: self.audio_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -998,10 +1047,13 @@ class CaptionerUI:
         buffer_trimming = self.buffer_trimming_var.get()
         buffer_trimming_sec = self.buffer_trimming_sec_var.get()
         vac_min_chunk_size = self.vac_min_chunk_size_var.get()
-        vac_dynamic_chunk_size = self.vac_dynamic_chunk_size_var.get()
-        vad_threshold = self.vad_threshold_var.get()
+        vac_is_dynamic_chunk_size = self.vac_is_dynamic_chunk_size_var.get()
+        vad_start_threshold = self.vad_start_threshold_var.get()
+        vad_end_threshold = self.vad_end_threshold_var.get()
         vad_min_silence_duration = self.vad_min_silence_duration_var.get()
-        vad_speech_pad = self.vad_speech_pad_var.get()
+        vad_speech_pad_start = self.vad_speech_pad_start_var.get()
+        vad_speech_pad_end = self.vad_speech_pad_end_var.get()
+        vad_hangover_chunks = int(self.vad_hangover_chunks_var.get())
 
         server_url = self.server_url_var.get().strip()
         if not server_url:
@@ -1078,10 +1130,13 @@ class CaptionerUI:
             f"\t  Buffer trimming time: {buffer_trimming_sec} s\n"
             f"\t  VAC enabled: {self.vac_var.get()}\n"
             f"\t  VAC minimum chunk size: {vac_min_chunk_size}\n"
-            f"\t  VAC dynamic chunk size: {vac_dynamic_chunk_size}\n"
-            f"\t  VAD threshold: {vad_threshold}\n"
+            f"\t  VAC is dynamic chunk size: {vac_is_dynamic_chunk_size}\n"
+            f"\t  VAD start threshold: {vad_start_threshold}\n"
+            f"\t  VAD end threshold: {vad_end_threshold}\n"
             f"\t  VAD minimum silence duration: {vad_min_silence_duration} s\n"
-            f"\t  VAD speech pad: {vad_speech_pad} s\n"
+            f"\t  VAD speech pad start: {vad_speech_pad_start} s\n"
+            f"\t  VAD speech pad end: {vad_speech_pad_end} s\n"
+            f"\t  VAD hangover chunks: {vad_hangover_chunks}\n"
             f"\t  Whisper VAD enabled: {self.vad_var.get()}\n"
         )
         logger.info(info_str)
@@ -1101,10 +1156,16 @@ class CaptionerUI:
             "buffer_trimming_sec": buffer_trimming_sec,
             "vac": self.vac_var.get(),
             "vac_min_chunk_size": vac_min_chunk_size,
-            "vac_dynamic_chunk_size": vac_dynamic_chunk_size,
-            "vad_threshold": vad_threshold,
+            "vac_is_dynamic_chunk_size": vac_is_dynamic_chunk_size,
+            "vad_start_threshold": vad_start_threshold,
+            "vad_end_threshold": vad_end_threshold,
             "vad_min_silence_duration_ms": int(vad_min_silence_duration * 1000),
-            "vad_speech_pad_ms": int(vad_speech_pad * 1000),
+            "vad_speech_pad_start_ms": int(vad_speech_pad_start * 1000),
+            "vad_speech_pad_end_ms": int(vad_speech_pad_end * 1000),
+            "vad_hangover_chunks": vad_hangover_chunks,
+            # Keep legacy keys for compatibility with older server-side paths.
+            "vad_threshold": vad_start_threshold,
+            "vad_speech_pad_ms": int(max(vad_speech_pad_start, vad_speech_pad_end) * 1000),
             "whisper_vad": self.vad_var.get(),
         }
 

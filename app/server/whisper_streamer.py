@@ -14,6 +14,7 @@ from app.server.asr_backends import (
     OpenaiApiASR,
     WhisperTimestampedASR,
 )
+from app.common.utils import clamp
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ class OnlineASRProcessor:
         confirmed = self.to_flush(out)
         uc = self.to_flush(self.transcript_buffer.buffer)
         unconfirmed = (uc[0], uc[1], uc[2].rstrip(string.punctuation))
-        return (confirmed, unconfirmed)
+        return (confirmed, unconfirmed, "inference")
 
     def chunk_completed_sentence(self):
         if self.committed == []:
@@ -312,21 +313,18 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
     def __init__(
         self,
         online_chunk_size,
-        dynamic_chunk_size,
-        vad_threshold,
+        is_dynamic_chunk_size,
+        vad_start_threshold,
+        vad_end_threshold,
         vad_min_silence_duration_ms,
-        vad_speech_pad_ms,
-        vad_start_threshold=None,
-        vad_end_threshold=None,
-        vad_hysteresis_gap=0.15,
-        vad_hangover_frames=0,
-        vad_speech_pad_start_ms=None,
-        vad_speech_pad_end_ms=None,
+        vad_speech_pad_start_ms,
+        vad_speech_pad_end_ms,
+        vad_hangover_chunks,
         *a,
         **kw,
     ):
         self.online_chunk_size = online_chunk_size
-        self.dynamic_chunk_size = dynamic_chunk_size
+        self.is_dynamic_chunk_size = is_dynamic_chunk_size
 
         self.online = OnlineASRProcessor(*a, **kw)
 
@@ -339,15 +337,12 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         from app.server.silero_vad_iterator import FixedVADIterator
         self.vac = FixedVADIterator(
             model,
-            threshold=vad_threshold,
             start_threshold=vad_start_threshold,
             end_threshold=vad_end_threshold,
-            hysteresis_gap=vad_hysteresis_gap,
             min_silence_duration_ms=vad_min_silence_duration_ms,
-            speech_pad_ms=vad_speech_pad_ms,
             speech_pad_start_ms=vad_speech_pad_start_ms,
             speech_pad_end_ms=vad_speech_pad_end_ms,
-            hangover_frames=vad_hangover_frames,
+            hangover_chunks=vad_hangover_chunks,
         )
 
         self.logfile = self.online.logfile
@@ -373,27 +368,36 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         self.audio_buffer = np.append(self.audio_buffer, audio)
 
         if res is not None:
-            frame = list(res.values())[0]-self.buffer_offset
+            buf_len = len(self.audio_buffer)
+            frame = int(list(res.values())[0] - self.buffer_offset)
+
             if 'start' in res and 'end' not in res:
                 self.status = 'voice'
-                send_audio = self.audio_buffer[frame:]
-                self.online.init(offset=(frame+self.buffer_offset)/self.SAMPLING_RATE)
+                start_idx = clamp(frame, 0, buf_len)
+                send_audio = self.audio_buffer[start_idx:]
+                self.online.init(offset=(start_idx + self.buffer_offset) / self.SAMPLING_RATE)
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.clear_buffer()
+
             elif 'end' in res and 'start' not in res:
                 self.status = 'nonvoice'
-                send_audio = self.audio_buffer[:frame]
+                end_idx = clamp(frame, 0, buf_len)
+                send_audio = self.audio_buffer[:end_idx]
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.is_currently_final = True
                 self.clear_buffer()
+
             else:
-                beg = res["start"]-self.buffer_offset
-                end = res["end"]-self.buffer_offset
+                beg = int(res["start"] - self.buffer_offset)
+                end = int(res["end"] - self.buffer_offset)
+                beg = clamp(beg, 0, buf_len)
+                end = clamp(end, beg, buf_len)
+
                 self.status = 'nonvoice'
                 send_audio = self.audio_buffer[beg:end]
-                self.online.init(offset=(beg+self.buffer_offset)/self.SAMPLING_RATE)
+                self.online.init(offset=(beg + self.buffer_offset) / self.SAMPLING_RATE)
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.is_currently_final = True
@@ -420,11 +424,11 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
             self.current_online_chunk_buffer_size = 0
             ret = self.online.process_iter()
 
-            if self.dynamic_chunk_size:
+            if self.is_dynamic_chunk_size:
                 roll_avg_t = self.online.get_roll_avg_inference_time()
                 self.online_chunk_size = max(0.5, min(3.0, roll_avg_t))
 
-            return ret + ("inference",)
+            return ret
         else:
             return (self.EMPTY_SEG, self.EMPTY_SEG, "vad_only")
 
@@ -442,19 +446,20 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
     def _finalize_online_segment(self):
         pre_finish_confirmed = self.EMPTY_SEG
-        pre_finish_unconfirmed = self.EMPTY_SEG
 
-        if len(self.online.audio_buffer) > 0:
-            pre_finish_confirmed, pre_finish_unconfirmed = self.online.process_iter()
+        # Only infer if new audio arrived since the last inference cycle.
+        has_pending_audio = self.current_online_chunk_buffer_size > 0
+        if has_pending_audio:
+            pre_finish_confirmed, _, _ = self.online.process_iter()
 
         finish_confirmed, _ = self.online.finish()
-
         combined_confirmed = self._merge_segments(pre_finish_confirmed, finish_confirmed)
-        combined_unconfirmed = pre_finish_unconfirmed if pre_finish_unconfirmed[2] else self.EMPTY_SEG
 
         self.current_online_chunk_buffer_size = 0
         self.is_currently_final = False
-        return combined_confirmed, combined_unconfirmed
+
+        # Flush/finalize must not emit unconfirmed tail.
+        return combined_confirmed, self.EMPTY_SEG
 
     def finish(self):
         end_marker = self.vac.flush()
@@ -556,15 +561,13 @@ def asr_factory(args, logfile=sys.stderr):
     # Apply common configurations
     if getattr(args, 'whisper_vad', False):  # Checks if VAD argument is present and True
         logger.info("Setting VAD filter")
-        whisper_vad_threshold = getattr(args, "vad_start_threshold", None) or args.vad_threshold
-        whisper_vad_neg_threshold = getattr(args, "vad_end_threshold", None)
         asr.use_vad(dict(
-            threshold=whisper_vad_threshold,
-            neg_threshold=whisper_vad_neg_threshold,
+            threshold=args.vad_start_threshold,
+            neg_threshold=args.vad_end_threshold,
             min_speech_duration_ms=0,
             max_speech_duration_s=float("inf"),
             min_silence_duration_ms=args.vad_min_silence_duration_ms,
-            speech_pad_ms=args.vad_speech_pad_ms,
+            speech_pad_ms=max(args.vad_speech_pad_start_ms, args.vad_speech_pad_end_ms),
         ))
 
     language = args.language
@@ -584,16 +587,13 @@ def asr_factory(args, logfile=sys.stderr):
     if args.vac:
         online = VACOnlineASRProcessor(
             args.vac_min_chunk_size,
-            args.vac_dynamic_chunk_size,
-            args.vad_threshold,
+            args.vac_is_dynamic_chunk_size,
+            args.vad_start_threshold,
+            args.vad_end_threshold,
             args.vad_min_silence_duration_ms,
-            args.vad_speech_pad_ms,
-            getattr(args, "vad_start_threshold", None),
-            getattr(args, "vad_end_threshold", None),
-            getattr(args, "vad_hysteresis_gap", 0.15),
-            getattr(args, "vad_hangover_frames", 0),
-            getattr(args, "vad_speech_pad_start_ms", None),
-            getattr(args, "vad_speech_pad_end_ms", None),
+            args.vad_speech_pad_start_ms,
+            args.vad_speech_pad_end_ms,
+            args.vad_hangover_chunks,
             asr,
             tokenizer,
             logfile=logfile,

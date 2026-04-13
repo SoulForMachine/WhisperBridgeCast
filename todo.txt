@@ -30,6 +30,7 @@ x Add a status display in the GUI for client-server connection, audio device sta
 
 ## Bugs
 x listen_for_results stop_event logic sometimes makes it exit early
+- MME driver on Windows cuts off device names (~31 chars I think), so reported as separate in the list.
 
 ## UI
 

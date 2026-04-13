@@ -30,4 +30,5 @@ scafolding/
 *.tmp
 *.bak
 *.swp
+*.spec
 .aider*

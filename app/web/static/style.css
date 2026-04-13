@@ -16,7 +16,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-weight: lighter;
+  font-weight: normal;
   line-height: 1.5;
 }
 header {

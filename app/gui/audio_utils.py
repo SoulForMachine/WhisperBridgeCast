@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from collections import defaultdict
 from typing import Tuple
 
@@ -129,6 +129,19 @@ def list_unique_input_devices():
             )
 
             devices_dict[dev['name']][hostapi_name] = (caps, is_loopback)
+
+    # Handle MME 31-char name restriction: merge truncated MME devices into their full-name counterparts
+    mme_devices = [(name, api_map) for name, api_map in devices_dict.items() if "MME" in api_map]
+
+    for mme_name, mme_api_map in mme_devices:
+        if len(mme_name) == 31 and len(mme_api_map) == 1:
+            # Find a device whose name starts with this truncated name
+            for full_name, full_api_map in devices_dict.items():
+                if full_name != mme_name and full_name.startswith(mme_name):
+                    # Merge MME into the full-name device
+                    full_api_map["MME"] = mme_api_map["MME"]
+                    del devices_dict[mme_name]
+                    break
 
     p.terminate()
 

@@ -29,8 +29,14 @@ class WhisperServerParams:
         self.vac_min_chunk_size = 1.0
         self.vac_dynamic_chunk_size = True
         self.vad_threshold = 0.5
+        self.vad_start_threshold = None
+        self.vad_end_threshold = None
+        self.vad_hysteresis_gap = 0.15
+        self.vad_hangover_frames = 0
         self.vad_min_silence_duration_ms = 1000
         self.vad_speech_pad_ms = 1000
+        self.vad_speech_pad_start_ms = None
+        self.vad_speech_pad_end_ms = None
         self.whisper_vad = False
 
         # Buffer trimming

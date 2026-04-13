@@ -10,9 +10,15 @@ class VADIterator:
     def __init__(self,
                  model,
                  threshold: float = 0.5,
+                 start_threshold: float | None = None,
+                 end_threshold: float | None = None,
+                 hysteresis_gap: float = 0.15,
                  sampling_rate: int = 16000,
                  min_silence_duration_ms: int = 500,  # makes sense on one recording that I checked
-                 speech_pad_ms: int = 100             # same
+                 speech_pad_ms: int = 100,            # symmetric pad kept for backward-compat
+                 speech_pad_start_ms: int | None = None,
+                 speech_pad_end_ms: int | None = None,
+                 hangover_frames: int = 0,
                  ):
 
         """
@@ -37,14 +43,33 @@ class VADIterator:
         """
 
         self.model = model
-        self.threshold = threshold
+
+        if start_threshold is None:
+            start_threshold = threshold
+        if end_threshold is None:
+            end_threshold = start_threshold - hysteresis_gap
+
+        if not (0.0 <= end_threshold <= 1.0 and 0.0 <= start_threshold <= 1.0):
+            raise ValueError("start_threshold and end_threshold must be in [0, 1]")
+        if end_threshold > start_threshold:
+            raise ValueError("end_threshold must be <= start_threshold")
+
+        if speech_pad_start_ms is None:
+            speech_pad_start_ms = speech_pad_ms
+        if speech_pad_end_ms is None:
+            speech_pad_end_ms = speech_pad_ms
+
+        self.start_threshold = start_threshold
+        self.end_threshold = end_threshold
+        self.hangover_frames = max(0, int(hangover_frames))
         self.sampling_rate = sampling_rate
 
         if sampling_rate not in [8000, 16000]:
             raise ValueError('VADIterator does not support sampling rates other than [8000, 16000]')
 
         self.min_silence_samples = sampling_rate * min_silence_duration_ms / 1000
-        self.speech_pad_samples = sampling_rate * speech_pad_ms / 1000
+        self.speech_pad_start_samples = sampling_rate * speech_pad_start_ms / 1000
+        self.speech_pad_end_samples = sampling_rate * speech_pad_end_ms / 1000
         self.reset_states()
 
     def reset_states(self):
@@ -52,6 +77,7 @@ class VADIterator:
         self.model.reset_states()
         self.triggered = False
         self.temp_end = 0
+        self.low_prob_frames = 0
         self.current_sample = 0
 
     @torch.no_grad()
@@ -78,26 +104,58 @@ class VADIterator:
 
         speech_prob = self.model(x, self.sampling_rate).item()
 
-        if (speech_prob >= self.threshold) and self.temp_end:
+        if (speech_prob >= self.start_threshold) and self.temp_end:
             self.temp_end = 0
+            self.low_prob_frames = 0
 
-        if (speech_prob >= self.threshold) and not self.triggered:
+        if (speech_prob >= self.start_threshold) and not self.triggered:
             self.triggered = True
-            speech_start = max(0, self.current_sample - self.speech_pad_samples - window_size_samples)
+            self.low_prob_frames = 0
+            speech_start = max(0, self.current_sample - self.speech_pad_start_samples - window_size_samples)
             return {'start': int(speech_start) if not return_seconds else round(speech_start / self.sampling_rate, time_resolution)}
 
-        if (speech_prob < self.threshold - 0.15) and self.triggered:
+        if self.triggered and (speech_prob < self.end_threshold):
+            self.low_prob_frames += 1
             if not self.temp_end:
                 self.temp_end = self.current_sample
+
+            if self.low_prob_frames <= self.hangover_frames:
+                return None
+
             if self.current_sample - self.temp_end < self.min_silence_samples:
                 return None
             else:
-                speech_end = self.temp_end + self.speech_pad_samples - window_size_samples
+                speech_end = self.temp_end + self.speech_pad_end_samples - window_size_samples
                 self.temp_end = 0
+                self.low_prob_frames = 0
                 self.triggered = False
                 return {'end': int(speech_end) if not return_seconds else round(speech_end / self.sampling_rate, time_resolution)}
 
+        if self.triggered:
+            self.low_prob_frames = 0
+
         return None
+
+    def flush(self, return_seconds=False, time_resolution: int = 1, tail_samples: int = 0):
+        """Force-close an active speech segment at stream end.
+
+        tail_samples allows callers with internal buffering (e.g. FixedVADIterator)
+        to include not-yet-processed trailing samples in the final end marker.
+        """
+        if tail_samples > 0:
+            self.current_sample += int(tail_samples)
+
+        if not self.triggered:
+            return None
+
+        speech_end = self.current_sample + self.speech_pad_end_samples
+        self.temp_end = 0
+        self.low_prob_frames = 0
+        self.triggered = False
+
+        return {
+            'end': int(speech_end) if not return_seconds else round(speech_end / self.sampling_rate, time_resolution)
+        }
 
 #######################
 # because Silero now requires exactly 512-sized audio chunks
@@ -128,6 +186,15 @@ class FixedVADIterator(VADIterator):
                     # Remove end, merging this segment with the previous one.
                     del ret['end']
         return ret if ret != {} else None
+
+    def flush(self, return_seconds=False, time_resolution: int = 1):
+        tail_samples = len(self.buffer)
+        self.buffer = np.array([], dtype=np.float32)
+        return super().flush(
+            return_seconds=return_seconds,
+            time_resolution=time_resolution,
+            tail_samples=tail_samples,
+        )
 
 if __name__ == "__main__":
     # test/demonstrate the need for FixedVADIterator:

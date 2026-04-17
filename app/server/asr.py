@@ -26,12 +26,15 @@ class WhisperServerParams:
 
         # Voice activity detection
         self.vac = True
+        self.whisper_vad = False # Whisper's internal VAD.
         self.vac_min_chunk_size = 1.0
-        self.vac_dynamic_chunk_size = True
-        self.vad_threshold = 0.5
-        self.vad_min_silence_duration_ms = 1000
-        self.vad_speech_pad_ms = 1000
-        self.whisper_vad = False
+        self.vac_is_dynamic_chunk_size = True
+        self.vad_start_threshold = 0.5
+        self.vad_end_threshold = 0.35
+        self.vad_hangover_chunks = 2
+        self.vad_min_silence_duration_ms = 500
+        self.vad_speech_pad_start_ms = 100
+        self.vad_speech_pad_end_ms = 100
 
         # Buffer trimming
         self.buffer_trimming = "segment"

@@ -426,7 +426,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
 
             if self.is_dynamic_chunk_size:
                 roll_avg_t = self.online.get_roll_avg_inference_time()
-                self.online_chunk_size = max(0.5, min(3.0, roll_avg_t))
+                self.online_chunk_size = clamp(roll_avg_t, 0.1, 3.0)
 
             return ret
         else:

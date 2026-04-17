@@ -17,7 +17,7 @@ from app.gui.audio_utils import (
     sort_api_by_preference,
 )
 from app.gui.network import WhisperClient
-from app.common.utils import str_to_int
+from app.common.utils import str_to_int, clamp
 
 logger = logging.getLogger(__name__)
 
@@ -1310,7 +1310,7 @@ class CaptionerUI:
                                 self.net_server_asr_proc_t_roll_avg_label.config(text=f"roll avg: {stat_value:.3f} s")
                             self.gui_queue.put(upd_asr_roll_avg_proc_time)
 
-                            new_chunk_size = max(0.5, min(3.0, stat_value))
+                            new_chunk_size = clamp(stat_value, 0.1, 3.0)
                             if self.audio_producer:
                                 self.audio_producer.min_chunk_size = new_chunk_size
                             if self.audio_producer_2:

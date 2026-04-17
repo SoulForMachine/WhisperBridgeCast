@@ -69,7 +69,6 @@ class VADIterator:
         self.reset_states()
 
     def reset_states(self):
-
         self.model.reset_states()
         self.triggered = False
         self.temp_end = 0

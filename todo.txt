@@ -30,7 +30,7 @@ x Add a status display in the GUI for client-server connection, audio device sta
 
 ## Bugs
 x listen_for_results stop_event logic sometimes makes it exit early
-- MME driver on Windows cuts off device names (~31 chars I think), so reported as separate in the list.
+x MME driver on Windows cuts off device names (~31 chars I think), so reported as separate in the list.
 
 ## UI
 
@@ -67,11 +67,11 @@ x Do not wait for translation to complete before sending the original text. Use 
 x Try out googletrans and deep_traslator libraries for free online translation services.
 x Allow for the client to dynamically adjust the audio chunk size, or use smaller chunks and adjust the minimal asr processor chunk size.
 x Allow the user to enable/disable original language transcript in web server.
+x (solved with VAC improvements) Add padding from the next audio chunk if necessary for requested length.
 - Starting the server pipeline separatly from UI.
 - After connection is established, server should send to client all available ASR and translation backends info: engine, models, online service, supported languages, needed parameters...
 - The client should be able to send updated individual settings or restart parts of the server pipeline.
 - Use slower but better translation in a second pass?
-- Add padding from the next audio chunk if necessary for requested length.
 - Start transcription inference asynchronously, so chunks can be processed one by one.
 - Send sentence audio timestamp to all consumers.
 - Retranslate partial sentences after certain number of words added; or don't and just remove word_increment. (related to sending transcript and translation separatly)
@@ -79,3 +79,4 @@ x Allow the user to enable/disable original language transcript in web server.
     INFO    [ASR]  |  shockwave through the world. And of course, one can always say, okay, Iran is there
 - If translation processing is slow there might be multiple jobs of the same partial sentence queued. Try skipping unnecessary ones.
 - Whisper sometimes alternates between two words in consecutive inferences. Try preventing stalling confirmation by picking the word with greater probability.
+- See how audio stream buffering can be improved: VACProcessor, Processor, VADIterator.

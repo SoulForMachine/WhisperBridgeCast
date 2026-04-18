@@ -13,6 +13,8 @@ from app.server.transl_backends import (
     discover_backend_classes,
 )
 
+from app.common.utils import MPCountingQueue
+from app.server.settings import TranslationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +33,22 @@ def get_lang_code(lang: str) -> str:
 class Translator:
     BACKEND_CLASSES: tuple[type[TranslBase], ...] = discover_backend_classes()
 
-    def __init__(self, engine_id, transl_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
-        self.engine_id = engine_id
-        self.transl_params = transl_params or {}
+    def __init__(
+        self,
+        transl_settings: TranslationSettings,
+        source_queue: MPCountingQueue,
+        output_queues: list[queue.Queue],
+        sender_queue: queue.Queue,
+        only_complete_sent: bool
+    ):
+        self.transl_enabled = transl_settings.enable
+        self.engine_id = transl_settings.engine
+        self.transl_params = transl_settings.engine_params or {}
         self.engine = None
-        self.src_lang = src_lang
-        self.target_lang = target_lang
-        self.src_lang_code = get_lang_code(src_lang)
-        self.target_lang_code = get_lang_code(target_lang)
+        self.src_lang = transl_settings.src_language
+        self.target_lang = transl_settings.target_language
+        self.src_lang_code = get_lang_code(self.src_lang)
+        self.target_lang_code = get_lang_code(self.target_lang)
         self.source_queue = source_queue
         self.output_queues = output_queues
         self.sender_queue = sender_queue
@@ -401,7 +411,7 @@ class Translator:
     def initialize_engine(self):
         self.engine = None
 
-        if self.src_lang != self.target_lang:
+        if self.transl_enabled and self.src_lang != self.target_lang:
             try:
                 backend_by_name = {backend_cls.get_name(): backend_cls for backend_cls in self.BACKEND_CLASSES}
                 backend_cls = backend_by_name.get(self.engine_id)

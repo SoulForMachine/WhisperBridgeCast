@@ -34,6 +34,7 @@ class ASRSettings:
 @dataclass
 class TranslationSettings:
     enable: bool = True
+    src_language: str = "en"
     target_language: str = "sr"
     engine: str = "MarianMT"
     engine_params: dict = field(default_factory=dict)

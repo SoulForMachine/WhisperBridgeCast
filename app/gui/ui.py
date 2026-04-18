@@ -1137,39 +1137,51 @@ class CaptionerUI:
         transl_params["source_diff_enabled"] = bool(self.source_diff_enabled_var.get())
         transl_params["target_diff_enabled"] = bool(self.target_diff_enabled_var.get())
 
-        pipeline_settings = PipelineSettings()
-        pipeline_settings.zoom_url = self.zoom_url_var.get().strip()
+        pl_set = PipelineSettings()
+        pl_set.zoom_url = self.zoom_url_var.get().strip()
 
-        pipeline_settings.asr.model = self.model_var.get()
-        pipeline_settings.asr.device = self.whisper_device_var.get()
-        pipeline_settings.asr.compute_type = self.whisper_compute_type_var.get()
-        pipeline_settings.asr.language = self.lang_display_to_code.get(self.lang_var.get(), self.lang_var.get())
-        pipeline_settings.asr.nsp_threshold = threshold
-        pipeline_settings.asr.buffer_trimming = buffer_trimming
-        pipeline_settings.asr.buffer_trimming_sec = buffer_trimming_sec
+        pl_set.asr.model = self.model_var.get()
+        pl_set.asr.device = self.whisper_device_var.get()
+        pl_set.asr.compute_type = self.whisper_compute_type_var.get()
+        pl_set.asr.language = self.lang_display_to_code.get(self.lang_var.get(), self.lang_var.get())
+        pl_set.asr.nsp_threshold = threshold
+        pl_set.asr.buffer_trimming = buffer_trimming
+        pl_set.asr.buffer_trimming_sec = buffer_trimming_sec
 
-        pipeline_settings.vac.enable = bool(self.vac_var.get())
-        pipeline_settings.vac.enable_whisper_internal_vad = bool(self.vad_var.get())
-        pipeline_settings.vac.min_chunk_size_s = vac_min_chunk_size
-        pipeline_settings.vac.is_dynamic_chunk_size = vac_is_dynamic_chunk_size
-        pipeline_settings.vac.start_threshold = vad_start_threshold
-        pipeline_settings.vac.end_threshold = vad_end_threshold
-        pipeline_settings.vac.min_silence_duration_ms = int(vad_min_silence_duration * 1000)
-        pipeline_settings.vac.speech_pad_start_ms = int(vad_speech_pad_start * 1000)
-        pipeline_settings.vac.speech_pad_end_ms = int(vad_speech_pad_end * 1000)
-        pipeline_settings.vac.hangover_chunks = vad_hangover_chunks
+        pl_set.vac.enable = bool(self.vac_var.get())
+        pl_set.vac.enable_whisper_internal_vad = bool(self.vad_var.get())
+        pl_set.vac.min_chunk_size_s = vac_min_chunk_size
+        pl_set.vac.is_dynamic_chunk_size = vac_is_dynamic_chunk_size
+        pl_set.vac.start_threshold = vad_start_threshold
+        pl_set.vac.end_threshold = vad_end_threshold
+        pl_set.vac.min_silence_duration_ms = int(vad_min_silence_duration * 1000)
+        pl_set.vac.speech_pad_start_ms = int(vad_speech_pad_start * 1000)
+        pl_set.vac.speech_pad_end_ms = int(vad_speech_pad_end * 1000)
+        pl_set.vac.hangover_chunks = vad_hangover_chunks
 
-        pipeline_settings.translation.enable = bool(self.enable_translation_var.get())
-        pipeline_settings.translation.target_language = self.target_lang_display_to_code.get(self.target_lang_var.get(), self.target_lang_var.get())
-        pipeline_settings.translation.engine = transl_engine
-        pipeline_settings.translation.engine_params = {
+        pl_set.translation.enable = bool(self.enable_translation_var.get())
+        pl_set.translation.src_language = pl_set.asr.language
+        pl_set.translation.target_language = self.target_lang_display_to_code.get(self.target_lang_var.get(), self.target_lang_var.get())
+        pl_set.translation.engine = transl_engine
+        pl_set.translation.engine_params = {
             k: v for k, v in transl_params.items() if k not in {"word_increment", "source_diff_enabled", "target_diff_enabled"}
         }
-        pipeline_settings.translation.word_increment = transl_params["word_increment"]
-        pipeline_settings.translation.source_diff_enabled = transl_params["source_diff_enabled"]
-        pipeline_settings.translation.target_diff_enabled = transl_params["target_diff_enabled"]
+        pl_set.translation.word_increment = transl_params["word_increment"]
+        pl_set.translation.source_diff_enabled = transl_params["source_diff_enabled"]
+        pl_set.translation.target_diff_enabled = transl_params["target_diff_enabled"]
 
-        self.pipeline_settings = pipeline_settings
+        # Set ASR task based on whether translation is enabled with Whisper and target language is English,
+        # in which case we can use Whisper's built-in translation capability.
+        if (
+            pl_set.translation.enable 
+            and pl_set.translation.engine == "Whisper"
+            and pl_set.translation.target_language == "English"
+        ):
+            pl_set.asr.task = "translate"
+        else:
+            pl_set.asr.task = "transcribe"
+
+        self.pipeline_settings = pl_set
 
         info_str = (
             f"Connecting to server at {server_url}:{port} with parameters:\n"
@@ -1177,9 +1189,9 @@ class CaptionerUI:
             f"\t  Whisper model: {self.model_var.get()}\n"
             f"\t  Whisper device: {self.whisper_device_var.get()}\n"
             f"\t  Whisper compute type: {self.whisper_compute_type_var.get()}\n"
-            f"\t  Language: {pipeline_settings.asr.language}\n"
+            f"\t  Language: {pl_set.asr.language}\n"
             f"\t  Enable translation: {self.enable_translation_var.get()}\n"
-            f"\t  Target language: {pipeline_settings.translation.target_language}\n"
+            f"\t  Target language: {pl_set.translation.target_language}\n"
             f"\t  Translation engine: {transl_engine}\n"
             f"\t  Online translator: {provider if provider else '<none>'}\n"
             f"\t  Threshold: {self.threshold_var.get()}\n"
@@ -1198,7 +1210,7 @@ class CaptionerUI:
         )
         logger.info(info_str)
 
-        pipeline_settings_dict = asdict(pipeline_settings)
+        pipeline_settings_dict = asdict(pl_set)
 
         self.net_send_queue = queue.Queue()
         self.net_recv_queue = queue.Queue()

@@ -19,29 +19,11 @@ class WhisperPipeline:
 		self.websrv_input_queue = queue.Queue()
 		self.sender_queue = sender_queue
 
-		transl_settings = pipeline_settings.translation
 		zoom_url = pipeline_settings.zoom_url
-
-		transl_params = dict(transl_settings.engine_params or {})
-		transl_params.update(
-			word_increment=transl_settings.word_increment,
-			source_diff_enabled=transl_settings.source_diff_enabled,
-			target_diff_enabled=transl_settings.target_diff_enabled,
-		)
-		language = pipeline_settings.asr.language
-		target_language = transl_settings.target_language
-
-		if transl_settings.enable is True:
-			transl_engine = transl_settings.engine
-		else:
-			transl_engine = "none"
 
 		logger.info("Starting Translator thread...")
 		self.translator = Translator(
-			transl_engine,
-			transl_params,
-			language,
-			target_language,
+			pipeline_settings.translation,
 			self.asr_queue,
 			[self.websrv_input_queue],
 			sender_queue,
@@ -66,7 +48,12 @@ class WhisperPipeline:
 		self.websrv.start(self.websrv_input_queue)
 
 		logger.info("Starting ASR thread...")
-		self.asr_proc = ASRProcessor(pipeline_settings.asr, self.audio_queue, self.asr_queue, sender_queue)
+		self.asr_proc = ASRProcessor(
+			pipeline_settings,
+			self.audio_queue,
+			self.asr_queue,
+			sender_queue
+		)
 		self.asr_proc.start()
 
 	def process(self, arr):

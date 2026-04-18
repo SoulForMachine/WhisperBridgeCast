@@ -18,15 +18,6 @@ class WhisperOnline:
             "Serbian": "sr",
         }.get(settings.asr.language, "auto")
 
-        if (
-            settings.translation.enable 
-            and settings.translation.engine == "Whisper" 
-            and settings.translation.target_language == "English"
-        ):
-            settings.asr.task = "translate"
-        else:
-            settings.asr.task = "transcribe"
-
         # Create whisper online processor object with settings.
         self.asr, self.asr_proc = ws.asr_factory(settings)
 

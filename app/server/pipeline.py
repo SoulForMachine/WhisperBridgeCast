@@ -1,11 +1,11 @@
 import logging
 import multiprocessing as mp
 import queue
-from typing import Any
 
 from app.common.utils import MPCountingQueue
 from app.server.asr import ASRProcessor
 from app.server.senders import ClientCaptionSender, ZoomCaptionSender
+from app.server.settings import PipelineSettings
 from app.server.translation import Translator
 
 
@@ -13,20 +13,26 @@ logger = logging.getLogger(__name__)
 
 
 class WhisperPipeline:
-	def __init__(self, client_params: dict[str, Any], sender_queue: mp.Queue):
+	def __init__(self, pipeline_settings: PipelineSettings, sender_queue: mp.Queue):
 		self.audio_queue = MPCountingQueue()
 		self.asr_queue = MPCountingQueue()
 		self.websrv_input_queue = queue.Queue()
 		self.sender_queue = sender_queue
 
-		zoom_url = client_params.get("zoom_url")
+		transl_settings = pipeline_settings.translation
+		zoom_url = pipeline_settings.zoom_url
 
-		transl_params = client_params.get("translation_params")
-		language = client_params.get("language")
-		target_language = client_params.get("target_language")
+		transl_params = dict(transl_settings.engine_params or {})
+		transl_params.update(
+			word_increment=transl_settings.word_increment,
+			source_diff_enabled=transl_settings.source_diff_enabled,
+			target_diff_enabled=transl_settings.target_diff_enabled,
+		)
+		language = pipeline_settings.asr.language
+		target_language = transl_settings.target_language
 
-		if client_params.get("enable_translation") is True:
-			transl_engine = client_params.get("translation_engine", "MarianMT")
+		if transl_settings.enable is True:
+			transl_engine = transl_settings.engine
 		else:
 			transl_engine = "none"
 
@@ -50,7 +56,7 @@ class WhisperPipeline:
 
 		self.client_caption_sender = None
 		self.client_caption_sender_queue = None
-		if client_params.get("send_transcript"):
+		if pipeline_settings.write_transcript:
 			self.start_sending_client_transcript()
 
 		logger.info("Starting transcript web server...")
@@ -60,7 +66,7 @@ class WhisperPipeline:
 		self.websrv.start(self.websrv_input_queue)
 
 		logger.info("Starting ASR thread...")
-		self.asr_proc = ASRProcessor(client_params, self.audio_queue, self.asr_queue, sender_queue)
+		self.asr_proc = ASRProcessor(pipeline_settings.asr, self.audio_queue, self.asr_queue, sender_queue)
 		self.asr_proc.start()
 
 	def process(self, arr):

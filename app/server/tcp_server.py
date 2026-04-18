@@ -6,13 +6,14 @@ import threading
 from app.common import net_common as netc
 
 from app.server.pipeline import WhisperPipeline
+from app.server.settings import ServerSettings, pipeline_settings_from_dict
 
 
 logger = logging.getLogger(__name__)
 
 
 class WhisperServer:
-	def __init__(self, host="0.0.0.0", port=5000, write_wav=False, write_transcript=False, warmup_file=None):
+	def __init__(self, host="0.0.0.0", port=5000, warmup_file=None):
 		self.conn = None
 		self.server_thread = None
 		self.is_running = False
@@ -21,8 +22,6 @@ class WhisperServer:
 		self.port = port
 		self.listen_socket = None
 		self.client_socket = None
-		self.write_wav = write_wav
-		self.write_transcript = write_transcript
 		self.warmup_file = warmup_file
 
 	def start(self):
@@ -80,22 +79,22 @@ class WhisperServer:
 			sender_thread = threading.Thread(target=self.sender_thread_func, args=(conn, sender_queue))
 			sender_thread.start()
 
-			# Receive parameters from the client and initialize the pipeline.
-			msg_type, params = netc.recv_message(conn)
-			if params is None or msg_type != "json":
-				logger.error("Failed to receive params from the client.")
+			# Receive pipeline settings from the client and initialize the pipeline.
+			msg_type, pipeline_payload = netc.recv_message(conn)
+			if pipeline_payload is None or msg_type != "json":
+				logger.error("Failed to receive pipeline settings from the client.")
 				self._close_socket(conn)
 				return
-			logger.info(f"Received params: {params}")
+			logger.info(f"Received pipeline settings: {pipeline_payload}")
 
-			# Easier way to pass the current log level and warmup file to child components.
-			params["log_level"] = logging.getLevelName(logger.getEffectiveLevel())
-			params["warmup_file"] = self.warmup_file
+			pipeline_settings = pipeline_settings_from_dict(pipeline_payload)
+			if self.warmup_file:
+				pipeline_settings.asr.warmup_file = self.warmup_file
 
-			pipeline = WhisperPipeline(params, sender_queue)
+			pipeline = WhisperPipeline(pipeline_settings, sender_queue)
 
 			# Start the wav file writer if needed.
-			if self.write_wav:
+			if pipeline_settings.write_wav:
 				from app.server import wav_writer
 				from datetime import datetime
 
@@ -121,7 +120,7 @@ class WhisperServer:
 					# Send received chunk to the pipeline.
 					pipeline.process(msg)
 
-					if self.write_wav:
+					if pipeline_settings.write_wav:
 						wav_out.write_chunk(msg)
 
 				elif msg_type == "json":

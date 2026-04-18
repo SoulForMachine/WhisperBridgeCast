@@ -520,91 +520,91 @@ def asr_factory(args, logfile=sys.stderr):
     """
     Creates and configures an ASR and ASR Online instance based on the specified backend and arguments.
     """
-    backend = args.backend
+    backend = args.asr.backend
     if backend == "openai-api":
         logger.debug("Using OpenAI API.")
-        nsp_threshold = args.nsp_threshold if args.nsp_threshold else 0.8
-        asr = OpenaiApiASR(lan=args.language, no_speech_prob_threshold=nsp_threshold)
+        nsp_threshold = args.asr.nsp_threshold if args.asr.nsp_threshold else 0.8
+        asr = OpenaiApiASR(lan=args.asr.language, no_speech_prob_threshold=nsp_threshold)
     else:
         if backend == "faster-whisper":
             asr_cls = FasterWhisperASR
-            nsp_threshold = args.nsp_threshold if args.nsp_threshold else 0.9
+            nsp_threshold = args.asr.nsp_threshold if args.asr.nsp_threshold else 0.9
         elif backend == "mlx-whisper":
             asr_cls = MLXWhisper
-            nsp_threshold = args.nsp_threshold if args.nsp_threshold else 0.9
+            nsp_threshold = args.asr.nsp_threshold if args.asr.nsp_threshold else 0.9
         else:
             asr_cls = WhisperTimestampedASR
 
         # Only for FasterWhisperASR and WhisperTimestampedASR
-        size = args.model
+        size = args.asr.model
         logger.info(
             f"Loading Whisper {size} model...\n"
-            f"\t  device: {args.whisper_device}\n"
-            f"\t  compute type: {args.whisper_compute_type}\n"
+            f"\t  device: {args.asr.device}\n"
+            f"\t  compute type: {args.asr.compute_type}\n"
             f"\t  nsp threshold: {nsp_threshold}\n"
-            f"\t  language: {args.language}\n"
-            f"\t  task: {args.task}"
+            f"\t  language: {args.asr.language}\n"
+            f"\t  task: {args.asr.task}"
         )
         t = time.time()
         asr = asr_cls(
             modelsize=size,
-            lan=args.language,
-            cache_dir=args.model_cache_dir,
-            model_dir=args.model_dir,
+            lan=args.asr.language,
+            cache_dir=args.asr.model_cache_dir,
+            model_dir=args.asr.model_dir,
             no_speech_prob_threshold=nsp_threshold,
-            device=args.whisper_device,
-            compute_type=args.whisper_compute_type
+            device=args.asr.device,
+            compute_type=args.asr.compute_type
         )
         e = time.time()
         logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
-    if getattr(args, 'whisper_vad', False):  # Checks if VAD argument is present and True
+    if getattr(args.vac, 'enable_whisper_internal_vad', False):
         logger.info("Setting VAD filter")
         asr.use_vad(dict(
-            threshold=args.vad_start_threshold,
-            neg_threshold=args.vad_end_threshold,
+            threshold=args.vac.start_threshold,
+            neg_threshold=args.vac.end_threshold,
             min_speech_duration_ms=0,
             max_speech_duration_s=float("inf"),
-            min_silence_duration_ms=args.vad_min_silence_duration_ms,
-            speech_pad_ms=max(args.vad_speech_pad_start_ms, args.vad_speech_pad_end_ms),
+            min_silence_duration_ms=args.vac.min_silence_duration_ms,
+            speech_pad_ms=max(args.vac.speech_pad_start_ms, args.vac.speech_pad_end_ms),
         ))
 
-    language = args.language
-    if args.task == "translate":
+    language = args.asr.language
+    if args.asr.task == "translate":
         asr.set_translate_task()
         tgt_language = "en"  # Whisper translates into English
     else:
         tgt_language = language  # Whisper transcribes in this language
 
     # Create the tokenizer
-    if args.buffer_trimming == "sentence":
+    if args.asr.buffer_trimming == "sentence":
         tokenizer = create_tokenizer(tgt_language)
     else:
         tokenizer = None
 
     # Create the OnlineASRProcessor
-    if args.vac:
+    if args.vac.enable:
         online = VACOnlineASRProcessor(
-            args.vac_min_chunk_size,
-            args.vac_is_dynamic_chunk_size,
-            args.vad_start_threshold,
-            args.vad_end_threshold,
-            args.vad_min_silence_duration_ms,
-            args.vad_speech_pad_start_ms,
-            args.vad_speech_pad_end_ms,
-            args.vad_hangover_chunks,
+            args.vac.min_chunk_size_s,
+            args.vac.is_dynamic_chunk_size,
+            args.vac.start_threshold,
+            args.vac.end_threshold,
+            args.vac.min_silence_duration_ms,
+            args.vac.speech_pad_start_ms,
+            args.vac.speech_pad_end_ms,
+            args.vac.hangover_chunks,
             asr,
             tokenizer,
             logfile=logfile,
-            buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec)
+            buffer_trimming=(args.asr.buffer_trimming, args.asr.buffer_trimming_sec)
         )
     else:
         online = OnlineASRProcessor(
             asr,
             tokenizer,
             logfile=logfile,
-            buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec)
+            buffer_trimming=(args.asr.buffer_trimming, args.asr.buffer_trimming_sec)
         )
 
     return asr, online

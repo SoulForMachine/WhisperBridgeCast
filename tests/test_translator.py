@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from app.server.settings import TranslationSettings
 from app.server.translation import Translator
 from app.server.transl_backends.base import TranslBase
 
@@ -55,11 +56,17 @@ def _collect_output(stop_event: threading.Event, out_q: queue.Queue, sink: list[
 
 def _build_translator(*, source_diff_enabled: bool = False, with_engine: bool = False) -> tuple[Translator, queue.Queue]:
     out_q: queue.Queue = queue.Queue()
+    transl_settings = TranslationSettings(
+        enable=True,
+        src_language="en",
+        target_language="de",
+        engine="Dummy",
+        engine_params={},
+        source_diff_enabled=source_diff_enabled,
+        target_diff_enabled=True,
+    )
     tr = Translator(
-        engine_id="Dummy",
-        transl_params={"source_diff_enabled": source_diff_enabled},
-        src_lang="English",
-        target_lang="German",
+        transl_settings=transl_settings,
         source_queue=queue.Queue(),
         output_queues=[out_q],
         sender_queue=queue.Queue(),
@@ -79,7 +86,7 @@ def test_source_diff_disabled_by_default() -> None:
 
 
 def test_compute_diff_ops_keeps_middle_insert_and_filters_trailing_insert() -> None:
-    nlp = Translator("Dummy", {}, "English", "German", queue.Queue(), [], queue.Queue(), False).src_nlp
+    nlp = _build_translator(source_diff_enabled=False)[0].src_nlp
 
     prev = [tok for tok in nlp("alpha beta gamma")]
     curr_middle = [tok for tok in nlp("alpha x beta gamma")]
@@ -508,11 +515,17 @@ def test_target_diff_state_resets_after_complete() -> None:
 
 def test_transcription_only_pipeline_stream_emits_source_messages_without_target() -> None:
     out_q: queue.Queue = queue.Queue()
+    transl_settings = TranslationSettings(
+        enable=True,
+        src_language="en",
+        target_language="en",  # same language => translation pipeline disabled
+        engine="Dummy",
+        engine_params={},
+        source_diff_enabled=False,
+        target_diff_enabled=True,
+    )
     tr = Translator(
-        engine_id="Dummy",
-        transl_params={"source_diff_enabled": False},
-        src_lang="English",
-        target_lang="English",  # same language => translation pipeline disabled
+        transl_settings=transl_settings,
         source_queue=queue.Queue(),
         output_queues=[out_q],
         sender_queue=queue.Queue(),

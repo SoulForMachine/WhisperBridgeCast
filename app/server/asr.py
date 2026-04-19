@@ -3,91 +3,29 @@ import multiprocessing as mp
 from pathlib import Path
 
 from app.common.utils import MPCountingQueue
+from app.server.settings import PipelineSettings
 
-
-class WhisperServerParams:
-    def __init__(self):
-        # Zoom URL
-        self.zoom_url = ""
-
-        # Whisper model
-        self.model = "large-v2"
-        self.model_cache_dir = None
-        self.model_dir = None
-        self.warmup_file = "data/samples_jfk.wav"
-
-        # Language and task
-        self.language = "auto"
-        self.task = "transcribe"
-
-        # Backend
-        self.backend = "faster-whisper"
-        self.nsp_threshold = None
-
-        # Voice activity detection
-        self.vac = True
-        self.whisper_vad = False # Whisper's internal VAD.
-        self.vac_min_chunk_size = 1.0
-        self.vac_is_dynamic_chunk_size = True
-        self.vad_start_threshold = 0.5
-        self.vad_end_threshold = 0.35
-        self.vad_hangover_chunks = 2
-        self.vad_min_silence_duration_ms = 500
-        self.vad_speech_pad_start_ms = 100
-        self.vad_speech_pad_end_ms = 100
-
-        # Buffer trimming
-        self.buffer_trimming = "segment"
-        self.buffer_trimming_sec = 15
-
-        # Device and compute
-        self.whisper_device = "cuda"
-        self.whisper_compute_type = "float32"
-
-        # Logging
-        self.log_level = "DEBUG"
+logger = logging.getLogger(__name__)
 
 
 class WhisperOnline:
-    def __init__(self, client_params: dict, logger: logging.Logger):
+    def __init__(self, settings: PipelineSettings, logger: logging.Logger):
         import app.server.whisper_streamer as ws
-
-        params = WhisperServerParams()
-
-        # Update params with client provided values
-        for key, value in client_params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
-
-        params.language = {
-            "English": "en",
-            "German": "de",
-            "Serbian": "sr",
-        }.get(client_params.get("language"), "auto")
-
-        if (
-            client_params.get("enable_translation") is True
-            and client_params.get("target_language") == "English"
-            and client_params.get("translation_engine") == "Whisper"
-        ):
-            params.task = "translate"
-        else:
-            params.task = "transcribe"
 
         ws.set_logging(logger.getEffectiveLevel())
 
-        # Create whisper online processor object with params.
-        self.asr, self.asr_proc = ws.asr_factory(params)
+        # Create whisper online processor object with settings.
+        self.asr, self.asr_proc = ws.asr_factory(settings)
 
         # warm up the ASR so first chunk isn't slow
-        warmup_file = self._resolve_warmup_file(params.warmup_file)
+        warmup_file = self._resolve_warmup_file(settings.asr.warmup_file)
         if warmup_file:
             a = ws.load_audio_chunk(warmup_file, 0, 1)
             self.asr.transcribe(a)
             logger.info(f"Whisper has warmed up using: {warmup_file}")
         else:
             logger.warning(
-                f"Warm up file not found: {params.warmup_file}. Whisper is not warmed up. The first chunk processing may take longer."
+                f"Warm up file not found: {settings.asr.warmup_file}. Whisper is not warmed up. The first chunk processing may take longer."
             )
 
     def clear(self):
@@ -125,12 +63,12 @@ class WhisperOnline:
 class ASRProcessor:
     def __init__(
         self,
-        client_params: dict,
+        settings: PipelineSettings,
         audio_queue: MPCountingQueue,
         result_queue: MPCountingQueue,
         sender_queue: mp.Queue,
     ):
-        self.client_params = client_params
+        self.settings = settings
         self.audio_queue = audio_queue
         self.result_queue = result_queue
         self.sender_queue = sender_queue
@@ -145,12 +83,13 @@ class ASRProcessor:
             self.asr_subproc = mp.Process(
                 target=asr_subprocess_main,
                 args=(
-                    self.client_params,
+                    self.settings,
                     self.audio_queue,
                     self.result_queue,
                     self.sender_queue,
                     self.asr_ready_event,
                     self.shutdown_event,
+                    logging.getLevelName(logger.getEffectiveLevel()),
                 ),
                 daemon=False,
             )
@@ -172,21 +111,22 @@ class ASRProcessor:
 
 
 def asr_subprocess_main(
-    client_params: dict,
+    settings: PipelineSettings,
     audio_queue: MPCountingQueue,
     asr_queue: MPCountingQueue,
     sender_queue: mp.Queue,
     asr_ready_event,
     shutdown_event,
+    log_level,
 ):
     """Run in subprocess: consume audio chunks and push ASR results."""
-    logger = logging.getLogger("whisper_online_asr_subproc")
-    logger.setLevel(client_params.get("log_level", "INFO"))
     logging.basicConfig(format="%(levelname)s\t%(message)s")
+    logger = logging.getLogger("whisper_online_asr_subproc")
+    logger.setLevel(log_level)
 
     sender_queue.put({"type": "status", "value": {"status": "asr_initializing"}})
 
-    whisper_online = WhisperOnline(client_params, logger)
+    whisper_online = WhisperOnline(settings, logger)
     asr_ready_event.set()
 
     sender_queue.put({"type": "status", "value": {"status": "asr_initialized"}})
@@ -245,7 +185,6 @@ def asr_subprocess_main(
     whisper_online.asr_proc.finish()
 
 __all__ = [
-    "WhisperServerParams",
     "WhisperOnline",
     "ASRProcessor",
 ]

@@ -10,10 +10,10 @@ class MarianMT(TranslBase):
         from transformers import MarianMTModel, MarianTokenizer
 
         language_pairs = {
-            ("English", "Serbian Cyrillic"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
-            ("English", "Serbian Latin"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
-            ("English", "German"): "Helsinki-NLP/opus-mt-en-de",
-            ("German", "English"): "Helsinki-NLP/opus-mt-de-en",
+            ("en", "sr-Cyrl"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
+            ("en", "sr-Latn"): "Helsinki-NLP/opus-mt-tc-base-en-sh",
+            ("en", "de"): "Helsinki-NLP/opus-mt-en-de",
+            ("de", "en"): "Helsinki-NLP/opus-mt-de-en",
         }
         model_name = language_pairs.get((src_lang, target_lang))
         if model_name is None:
@@ -22,8 +22,8 @@ class MarianMT(TranslBase):
         self.tokenizer = MarianTokenizer.from_pretrained(model_name)
         self.translator = MarianMTModel.from_pretrained(model_name).to("cuda")
         self.target_lang_token = {
-            "Serbian Cyrillic": "srp_Cyrl",
-            "Serbian Latin": "srp_Latn",
+            "sr-Cyrl": "srp_Cyrl",
+            "sr-Latn": "srp_Latn",
         }.get(target_lang, "")
 
     def translate_text(self, text: str) -> str:

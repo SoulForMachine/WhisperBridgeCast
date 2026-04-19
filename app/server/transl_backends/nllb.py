@@ -10,9 +10,9 @@ class NLLB(TranslBase):
         from transformers import AutoModelForSeq2SeqLM, BitsAndBytesConfig, NllbTokenizer
 
         self.language_codes = {
-            "English": "eng_Latn",
-            "Serbian Cyrillic": "srp_Cyrl",
-            "German": "deu_Latn",
+            "en": "eng_Latn",
+            "sr-Cyrl": "srp_Cyrl",
+            "de": "deu_Latn",
         }
         self.target_lang_token = self.language_codes[target_lang]
 

@@ -13,32 +13,29 @@ from app.server.transl_backends import (
     discover_backend_classes,
 )
 
+from app.common.utils import MPCountingQueue
+from app.server.settings import TranslationSettings
 
 logger = logging.getLogger(__name__)
-
-
-def get_lang_code(lang: str) -> str:
-    lang_code_map = {
-        "English": "en",
-        "German": "de",
-        "Serbian": "sr",
-        "Serbian Latin": "sr",
-        "Serbian Cyrillic": "sr",
-    }
-    return lang_code_map.get(lang, "")
 
 
 class Translator:
     BACKEND_CLASSES: tuple[type[TranslBase], ...] = discover_backend_classes()
 
-    def __init__(self, engine_id, transl_params, src_lang, target_lang, source_queue, output_queues, sender_queue: mp.Queue, only_complete_sent: bool):
-        self.engine_id = engine_id
-        self.transl_params = transl_params or {}
+    def __init__(
+        self,
+        transl_settings: TranslationSettings,
+        source_queue: MPCountingQueue,
+        output_queues: list[queue.Queue],
+        sender_queue: queue.Queue,
+        only_complete_sent: bool
+    ):
+        self.transl_enabled = transl_settings.enable
+        self.engine_id = transl_settings.engine
+        self.transl_params = transl_settings.engine_params or {}
         self.engine = None
-        self.src_lang = src_lang
-        self.target_lang = target_lang
-        self.src_lang_code = get_lang_code(src_lang)
-        self.target_lang_code = get_lang_code(target_lang)
+        self.src_lang = transl_settings.src_language
+        self.target_lang = transl_settings.target_language
         self.source_queue = source_queue
         self.output_queues = output_queues
         self.sender_queue = sender_queue
@@ -55,17 +52,17 @@ class Translator:
 
         self.next_text_id = 0
         self.pending_partial_id = None
-        self.source_diff_enabled = bool(self.transl_params.get("source_diff_enabled", False))
-        self.target_diff_enabled = bool(self.transl_params.get("target_diff_enabled", False))
+        self.source_diff_enabled = transl_settings.source_diff_enabled
+        self.target_diff_enabled = transl_settings.target_diff_enabled
         self._prev_source_conf_tok_count = 0
         self._prev_source_unconf_tokens: list[Token] = []
         self._prev_target_tokens: list[Token] = []
 
         import spacy
-        self.src_nlp = spacy.blank(self.src_lang_code)
+        self.src_nlp = spacy.blank(self.src_lang)
         self.src_nlp.add_pipe("sentencizer")
 
-        self.dest_nlp = spacy.blank(self.target_lang_code)
+        self.dest_nlp = spacy.blank(self.target_lang)
         self.dest_nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6
@@ -291,7 +288,7 @@ class Translator:
             out_q.put(
                 {
                     "id": text_id,
-                    "src_lang": self.src_lang_code,
+                    "src_lang": self.src_lang,
                     "orig_text": confirmed,
                     "orig_unconfirmed_text": unconfirmed,
                     "source_diff": source_diff_ops,
@@ -364,7 +361,7 @@ class Translator:
                 out_q.put(
                     {
                         "id": job["id"],
-                        "target_lang": self.target_lang_code,
+                        "target_lang": self.target_lang,
                         "transl_text": transl_text,
                         "target_diff": target_diff_ops,
                         "complete": complete,
@@ -401,7 +398,7 @@ class Translator:
     def initialize_engine(self):
         self.engine = None
 
-        if self.src_lang != self.target_lang:
+        if self.transl_enabled and self.src_lang != self.target_lang:
             try:
                 backend_by_name = {backend_cls.get_name(): backend_cls for backend_cls in self.BACKEND_CLASSES}
                 backend_cls = backend_by_name.get(self.engine_id)

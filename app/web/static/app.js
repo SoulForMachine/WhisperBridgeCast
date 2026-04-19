@@ -197,7 +197,7 @@ function upsertRow(entry, kind, langCode, text, diffOps, unconfirmedFrom = -1, h
 
   const pill = row.querySelector(".pill");
   const body = row.querySelector(".content");
-  pill.textContent = langCode || "";
+  pill.textContent = langCode.split('-')[0] || "";
   renderDiffText(body, text, diffOps, unconfirmedFrom, highlightDiffs);
 }
 

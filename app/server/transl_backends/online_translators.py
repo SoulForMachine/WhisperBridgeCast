@@ -122,37 +122,37 @@ class OnlineTranslators(TranslBase):
         match provider:
             case OnlineProviders.MYMEMORY:
                 return {
-                    "English": "en-US",
-                    "German": "de-DE",
-                    "Serbian Latin": "sr-Latn-RS",
-                    "Serbian Cyrillic": "sr-Cyrl-RS",
-                    "Serbian": "sr-Latn-RS",
+                    "en": "en-US",
+                    "de": "de-DE",
+                    "sr": "sr-Latn-RS",
+                    "sr-Latn": "sr-Latn-RS",
+                    "sr-Cyrl": "sr-Cyrl-RS",
                 }.get(lang, "auto")
             case OnlineProviders.MICROSOFT:
                 return {
-                    "English": "en",
-                    "German": "de",
-                    "Serbian Latin": "sr-latn",
-                    "Serbian Cyrillic": "sr-cyrl",
-                    "Serbian": "sr-latn",
+                    "en": "en",
+                    "de": "de",
+                    "sr": "sr-latn",
+                    "sr-Latn": "sr-latn",
+                    "sr-Cyrl": "sr-cyrl",
                 }.get(lang, "auto")
 
         return {
-            "English": "en",
-            "German": "de",
-            "Serbian": "sr",
-            "Serbian Latin": "sr",
-            "Serbian Cyrillic": "sr",
+            "en": "en",
+            "de": "de",
+            "sr": "sr",
+            "sr-Latn": "sr",
+            "sr-Cyrl": "sr",
         }.get(lang, "auto")
 
     @staticmethod
     def _lang_to_name(lang: str) -> str:
         return {
-            "English": "english",
-            "German": "german",
-            "Serbian": "serbian",
-            "Serbian Latin": "serbian",
-            "Serbian Cyrillic": "serbian",
+            "en": "english",
+            "de": "german",
+            "sr": "serbian",
+            "sr-Latn": "serbian",
+            "sr-Cyrl": "serbian",
         }.get(lang, "auto")
 
     def translate_text(self, text: str) -> str:

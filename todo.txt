@@ -80,3 +80,4 @@ x (solved with VAC improvements) Add padding from the next audio chunk if necess
 - If translation processing is slow there might be multiple jobs of the same partial sentence queued. Try skipping unnecessary ones.
 - Whisper sometimes alternates between two words in consecutive inferences. Try preventing stalling confirmation by picking the word with greater probability.
 - See how audio stream buffering can be improved: VACProcessor, Processor, VADIterator.
+- Normalize files - UTF8 and 4 spaces.

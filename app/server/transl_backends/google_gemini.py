@@ -1,5 +1,6 @@
 import os
 
+from app.common.languages import get_lang_name, get_target_lang_name
 from app.server.transl_backends.base import TranslBase
 
 
@@ -19,8 +20,8 @@ class GoogleGemini(TranslBase):
         api_key = transl_params.get("api_key", "")
         os.environ["GEMINI_API_KEY"] = api_key
         self.client = self.genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        self.src_lang = src_lang
-        self.target_lang = target_lang
+        self.src_lang = get_lang_name(src_lang)
+        self.target_lang = get_target_lang_name(target_lang)
 
     def translate_text(self, text: str) -> str:
         try:

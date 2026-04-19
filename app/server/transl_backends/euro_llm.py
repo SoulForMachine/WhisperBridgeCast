@@ -1,4 +1,5 @@
 from app.server.transl_backends.base import TranslBase
+from app.common.languages import get_lang_name, get_target_lang_name
 
 
 class EuroLLM(TranslBase):
@@ -32,8 +33,8 @@ class EuroLLM(TranslBase):
 
         self.model = torch.compile(self.model)
 
-        self.src_lang = src_lang
-        self.target_lang = target_lang
+        self.src_lang = get_lang_name(src_lang)
+        self.target_lang = get_target_lang_name(target_lang)
 
     def translate_text(self, text: str) -> str:
         if not text.endswith((".", "!", "?", ";")):

@@ -32,3 +32,4 @@ scafolding/
 *.swp
 *.spec
 .aider*
+captioner-settings.json

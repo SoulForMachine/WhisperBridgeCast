@@ -1,4 +1,6 @@
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field
+
+from app.common.utils import dataclass_from_dict, merge_dataclass_from_dict, settings_to_dict
 
 
 @dataclass
@@ -45,7 +47,7 @@ class TranslationSettings:
 
 @dataclass
 class PipelineSettings:
-    zoom_url: str = None
+    zoom_url: str = ""
     write_wav: bool = False
     write_transcript: bool = False
 
@@ -62,46 +64,13 @@ class ServerSettings:
     pipeline: PipelineSettings = field(default_factory=PipelineSettings)
 
 
-def merge_dataclass_from_dict(instance, values: dict):
-    """Recursively updates a dataclass instance from a nested dictionary."""
-    if not isinstance(values, dict):
-        return instance
-
-    for f in fields(instance):
-        if f.name not in values:
-            continue
-
-        incoming = values[f.name]
-        current = getattr(instance, f.name)
-
-        if is_dataclass(current) and isinstance(incoming, dict):
-            merge_dataclass_from_dict(current, incoming)
-        else:
-            setattr(instance, f.name, incoming)
-
-    return instance
-
-
-def pipeline_settings_from_dict(values: dict | None) -> PipelineSettings:
-    return merge_dataclass_from_dict(PipelineSettings(), values or {})
-
-
-def server_settings_from_dict(values: dict | None) -> ServerSettings:
-    return merge_dataclass_from_dict(ServerSettings(), values or {})
-
-
-def settings_to_dict(instance) -> dict:
-    return asdict(instance)
-
-
 __all__ = [
     "ServerSettings",
     "VACSettings",
     "ASRSettings",
     "TranslationSettings",
     "PipelineSettings",
+    "dataclass_from_dict",
     "merge_dataclass_from_dict",
-    "pipeline_settings_from_dict",
-    "server_settings_from_dict",
     "settings_to_dict",
 ]

@@ -4,9 +4,10 @@ import socket
 import threading
 
 from app.common import net_common as netc
+from app.common.utils import dataclass_from_dict
 
 from app.server.pipeline import WhisperPipeline
-from app.server.settings import ServerSettings, pipeline_settings_from_dict
+from app.server.settings import PipelineSettings
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class WhisperServer:
                 return
             logger.info(f"Received pipeline settings:\n{json.dumps(pipeline_payload, indent=2)}")
 
-            pipeline_settings = pipeline_settings_from_dict(pipeline_payload)
+            pipeline_settings = dataclass_from_dict(PipelineSettings, pipeline_payload)
             if self.warmup_file:
                 pipeline_settings.asr.warmup_file = self.warmup_file
 

@@ -1,8 +1,10 @@
 ﻿import logging
+import json
 import queue
 import threading
 import tkinter as tk
 from dataclasses import asdict
+from pathlib import Path
 from tkinter import font, ttk
 
 from app.gui.widgets.graph_widget import GraphWidget
@@ -18,8 +20,9 @@ from app.gui.audio_utils import (
     sort_api_by_preference,
 )
 from app.gui.network import WhisperClient
+from app.gui.settings import ClientSettings
 from app.server.settings import PipelineSettings
-from app.common.utils import str_to_int, clamp
+from app.common.utils import str_to_int, clamp, dataclass_from_dict, settings_to_dict
 from app.common.languages import (
     get_lang_code, get_lang_name, get_lang_name_list,
     get_target_lang_code, get_target_lang_name, get_target_lang_name_list
@@ -50,7 +53,10 @@ class Stats:
 
 class CaptionerUI:
     def __init__(self):
+        self.settings_file = Path("captioner-settings.json")
         self.pipeline_settings = PipelineSettings()
+        self.client_settings = ClientSettings()
+        self.load_settings_from_file()
         self.is_recording = False
         self.is_connected_to_server = False
         self.selected_device_1_info = None
@@ -101,10 +107,10 @@ class CaptionerUI:
         # --- Whisper Server URL ---
         row_idx = self.next_row(url_frame)
         ttk.Label(url_frame, text="Whisper Server URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.server_url_var = tk.StringVar(value="galloway")
+        self.server_url_var = tk.StringVar()
         self.server_url_entry = ttk.Entry(url_frame, textvariable=self.server_url_var)
         self.server_url_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-        self.server_port_var = tk.StringVar(value="5000")
+        self.server_port_var = tk.StringVar()
         self.server_port_entry = ttk.Entry(url_frame, textvariable=self.server_port_var, width=6)
         self.server_port_entry.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
         self.connect_btn = ttk.Button(url_frame, text="Connect", command=self.toggle_connection)
@@ -113,7 +119,7 @@ class CaptionerUI:
         # --- Zoom URL ---
         row_idx = self.next_row(url_frame)
         ttk.Label(url_frame, text="Zoom URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.zoom_url_var = tk.StringVar(value="")
+        self.zoom_url_var = tk.StringVar()
         self.zoom_url_entry = ttk.Entry(url_frame, textvariable=self.zoom_url_var)
         self.zoom_url_entry.grid(row=row_idx, column=1, columnspan=3, sticky="ew", padx=5, pady=5)
         self.clear_btn = ttk.Button(url_frame, text="Clear", command=lambda: self.zoom_url_var.set(""))
@@ -163,15 +169,14 @@ class CaptionerUI:
         # === Speech language ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        default_lang = get_lang_name(self.pipeline_settings.asr.language, "English")
-        self.lang_var = tk.StringVar(value=default_lang)
+        self.lang_var = tk.StringVar()
         self.lang_combo = ttk.Combobox(whisper_general_tab, textvariable=self.lang_var, values=get_lang_name_list(), state="readonly")
         self.lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper model ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.model_var = tk.StringVar(value=self.pipeline_settings.asr.model)
+        self.model_var = tk.StringVar()
         model_options = [
             "tiny.en", "tiny",
             "base.en", "base",
@@ -185,14 +190,14 @@ class CaptionerUI:
         # === Whisper device ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.whisper_device_var = tk.StringVar(value=self.pipeline_settings.asr.device)
+        self.whisper_device_var = tk.StringVar()
         self.whisper_device_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_device_var, values=["cuda", "cpu"], state="readonly")
         self.whisper_device_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper compute type ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.whisper_compute_type_var = tk.StringVar(value=self.pipeline_settings.asr.compute_type)
+        self.whisper_compute_type_var = tk.StringVar()
         dtypes = ["int8", "int8_float16", "float16", "float32"]
         self.whisper_compute_type_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
         self.whisper_compute_type_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -200,17 +205,17 @@ class CaptionerUI:
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Non-speech threshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.threshold_var = tk.DoubleVar(value=self.pipeline_settings.asr.nsp_threshold)
+        self.threshold_var = tk.DoubleVar()
         self.threshold_slider = tk.Scale(whisper_general_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
                                          command=lambda val: self.threshold_label.config(text=f"{float(val):.2f}"))
         self.threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.threshold_label = ttk.Label(whisper_general_tab, text=f"{self.threshold_var.get()}", width=5, relief="flat", anchor="center")
+        self.threshold_label = ttk.Label(whisper_general_tab, text="--", width=5, relief="flat", anchor="center")
         self.threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === Buffer trimming ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Buffer trimming").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.buffer_trimming_var = tk.StringVar(value=self.pipeline_settings.asr.buffer_trimming)
+        self.buffer_trimming_var = tk.StringVar()
         self.buffer_trimming_combo = ttk.Combobox(
             whisper_general_tab,
             textvariable=self.buffer_trimming_var,
@@ -222,7 +227,7 @@ class CaptionerUI:
         # === Buffer trimming time ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Buffer trimming time (s)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.buffer_trimming_sec_var = tk.DoubleVar(value=self.pipeline_settings.asr.buffer_trimming_sec)
+        self.buffer_trimming_sec_var = tk.DoubleVar()
         self.buffer_trimming_sec_slider = tk.Scale(
             whisper_general_tab,
             from_=5.0,
@@ -234,34 +239,34 @@ class CaptionerUI:
             command=lambda val: self.buffer_trimming_sec_label.config(text=f"{float(val):.1f}")
         )
         self.buffer_trimming_sec_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.buffer_trimming_sec_label = ttk.Label(whisper_general_tab, text=f"{self.buffer_trimming_sec_var.get():.1f}", width=5, relief="flat", anchor="center")
+        self.buffer_trimming_sec_label = ttk.Label(whisper_general_tab, text="--", width=5, relief="flat", anchor="center")
         self.buffer_trimming_sec_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # === VAD/VAC ===
         row_idx = self.next_row(whisper_vad_tab)
-        self.vac_var = tk.BooleanVar(value=self.pipeline_settings.vac.enable)
+        self.vac_var = tk.BooleanVar()
         self.vac_check = ttk.Checkbutton(whisper_vad_tab, text="Voice activity controller", variable=self.vac_var)
         self.vac_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
-        self.vad_var = tk.BooleanVar(value=self.pipeline_settings.vac.enable_whisper_internal_vad)
+        self.vad_var = tk.BooleanVar()
         self.vad_check = ttk.Checkbutton(whisper_vad_tab, text="Whisper's internal VAD", variable=self.vad_var)
         self.vad_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vac_min_chunk_size_var = tk.DoubleVar(value=self.pipeline_settings.vac.min_chunk_size_s)
+        self.vac_min_chunk_size_var = tk.DoubleVar()
         self.vac_min_chunk_size_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
                                                   command=lambda val: self.vac_min_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vac_min_chunk_size_label = ttk.Label(whisper_vad_tab, text=f"{self.vac_min_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.vac_min_chunk_size_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vac_min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
-        self.vac_is_dynamic_chunk_size_var = tk.BooleanVar(value=self.pipeline_settings.vac.is_dynamic_chunk_size)
+        self.vac_is_dynamic_chunk_size_var = tk.BooleanVar()
         self.vac_is_dynamic_chunk_size_check = ttk.Checkbutton(whisper_vad_tab, text="Dynamic", variable=self.vac_is_dynamic_chunk_size_var)
         self.vac_is_dynamic_chunk_size_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech start threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_start_threshold_var = tk.DoubleVar(value=self.pipeline_settings.vac.start_threshold)
+        self.vad_start_threshold_var = tk.DoubleVar()
         def start_threshold_slider_cmd(val):
             low_val = self.vad_end_threshold_var.get()
             if float(val) < low_val:
@@ -271,12 +276,12 @@ class CaptionerUI:
         self.vad_start_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_start_threshold_var,
                                                    command=start_threshold_slider_cmd)
         self.vad_start_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_start_threshold_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_start_threshold_var.get():.2f}", width=5, relief="flat", anchor="center")
+        self.vad_start_threshold_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_start_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech end threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_end_threshold_var = tk.DoubleVar(value=self.pipeline_settings.vac.end_threshold)
+        self.vad_end_threshold_var = tk.DoubleVar()
         def end_threshold_slider_cmd(val):
             high_val = self.vad_start_threshold_var.get()
             if float(val) > high_val:
@@ -286,43 +291,43 @@ class CaptionerUI:
         self.vad_end_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_end_threshold_var,
                                                  command=end_threshold_slider_cmd)
         self.vad_end_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_end_threshold_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_end_threshold_var.get():.2f}", width=5, relief="flat", anchor="center")
+        self.vad_end_threshold_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_end_threshold_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Min. silence duration (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_min_silence_duration_var = tk.DoubleVar(value=self.pipeline_settings.vac.min_silence_duration_ms / 1000.0)
+        self.vad_min_silence_duration_var = tk.DoubleVar()
         self.vad_min_silence_duration_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_min_silence_duration_var,
                                                         command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
         self.vad_min_silence_duration_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_min_silence_duration_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_min_silence_duration_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_min_silence_duration_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_min_silence_duration_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech pad start (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_speech_pad_start_var = tk.DoubleVar(value=self.pipeline_settings.vac.speech_pad_start_ms / 1000.0)
+        self.vad_speech_pad_start_var = tk.DoubleVar()
         self.vad_speech_pad_start_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_start_var,
                                                     command=lambda val: self.vad_speech_pad_start_label.config(text=f"{float(val):.1f}"))
         self.vad_speech_pad_start_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_speech_pad_start_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_speech_pad_start_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_speech_pad_start_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_speech_pad_start_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech pad end (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_speech_pad_end_var = tk.DoubleVar(value=self.pipeline_settings.vac.speech_pad_end_ms / 1000.0)
+        self.vad_speech_pad_end_var = tk.DoubleVar()
         self.vad_speech_pad_end_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_end_var,
                                                   command=lambda val: self.vad_speech_pad_end_label.config(text=f"{float(val):.1f}"))
         self.vad_speech_pad_end_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_speech_pad_end_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_speech_pad_end_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_speech_pad_end_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_speech_pad_end_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Hangover chunks").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_hangover_chunks_var = tk.IntVar(value=self.pipeline_settings.vac.hangover_chunks)
+        self.vad_hangover_chunks_var = tk.IntVar()
         self.vad_hangover_chunks_slider = tk.Scale(whisper_vad_tab, from_=0, to=10, orient="horizontal", resolution=1, showvalue=False, variable=self.vad_hangover_chunks_var,
                                                    command=lambda val: self.vad_hangover_chunks_label.config(text=f"{int(float(val))}"))
         self.vad_hangover_chunks_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.vad_hangover_chunks_label = ttk.Label(whisper_vad_tab, text=f"{self.vad_hangover_chunks_var.get()}", width=5, relief="flat", anchor="center")
+        self.vad_hangover_chunks_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vad_hangover_chunks_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # +++ Translation tab +++
@@ -331,16 +336,13 @@ class CaptionerUI:
 
         # === Target language ===
         row_idx = self.next_row(translation_tab)
-        self.enable_translation_var = tk.BooleanVar(value=self.pipeline_settings.translation.enable)
+        self.enable_translation_var = tk.BooleanVar()
         self.enable_translation_check = ttk.Checkbutton(translation_tab, text="Enable translation", variable=self.enable_translation_var, command=self.on_enable_translation_toggle)
         self.enable_translation_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Target language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        default_target_lang = get_target_lang_name(
-            self.pipeline_settings.translation.target_language,
-            "Serbian Cyrillic")
-        self.target_lang_var = tk.StringVar(value=default_target_lang)
+        self.target_lang_var = tk.StringVar()
         self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=get_target_lang_name_list(), state="readonly")
         self.target_lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
@@ -372,11 +374,11 @@ class CaptionerUI:
         self.online_provider_region_supported = {"Microsoft"}
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Translation engine").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_engine_var = tk.StringVar(value=self.pipeline_settings.translation.engine)
+        self.transl_engine_var = tk.StringVar()
         self.transl_engine_combo = ttk.Combobox(translation_tab, textvariable=self.transl_engine_var, values=self.transl_engines, state="readonly")
         self.transl_engine_combo.bind("<<ComboboxSelected>>", self.on_transl_engine_selection_change)
         self.transl_engine_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.online_translator_var = tk.StringVar(value=self.online_translators[0])
+        self.online_translator_var = tk.StringVar()
         self.online_translator_combo = ttk.Combobox(
             translation_tab,
             textvariable=self.online_translator_var,
@@ -388,20 +390,20 @@ class CaptionerUI:
         self.online_translator_combo.grid(row=row_idx, column=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
-        self.transl_word_increment_var = tk.IntVar(value=self.pipeline_settings.translation.word_increment)
+        self.transl_word_increment_var = tk.IntVar()
         ttk.Label(translation_tab, text="Word increment").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.transl_word_increment_slider = tk.Scale(translation_tab, from_=0, to=15, orient="horizontal", resolution=1, showvalue=False, variable=self.transl_word_increment_var,
                                                      command=lambda val: self.transl_word_increment_label.config(text=f"{int(val)}"))
         self.transl_word_increment_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.transl_word_increment_label = ttk.Label(translation_tab, text=f"{self.transl_word_increment_var.get()}", width=5, relief="flat", anchor="center")
+        self.transl_word_increment_label = ttk.Label(translation_tab, text="--", width=5, relief="flat", anchor="center")
         self.transl_word_increment_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Send diff:").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.source_diff_enabled_var = tk.BooleanVar(value=self.pipeline_settings.translation.source_diff_enabled)
+        self.source_diff_enabled_var = tk.BooleanVar()
         self.source_diff_enabled_check = ttk.Checkbutton(translation_tab, text="source", variable=self.source_diff_enabled_var)
         self.source_diff_enabled_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
-        self.target_diff_enabled_var = tk.BooleanVar(value=self.pipeline_settings.translation.target_diff_enabled)
+        self.target_diff_enabled_var = tk.BooleanVar()
         self.target_diff_enabled_check = ttk.Checkbutton(translation_tab, text="target", variable=self.target_diff_enabled_var)
         self.target_diff_enabled_check.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
@@ -414,7 +416,7 @@ class CaptionerUI:
         row_idx = self.next_row(self.engine_params_frame)
         self.libre_mirror_label = ttk.Label(self.engine_params_frame, text="Libre mirror")
         self.libre_mirror_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.libre_mirror_var = tk.StringVar(value=self.libre_mirrors[0])
+        self.libre_mirror_var = tk.StringVar()
         self.libre_mirror_combo = ttk.Combobox(self.engine_params_frame, textvariable=self.libre_mirror_var, values=self.libre_mirrors, state="readonly")
         self.libre_mirror_combo.grid(row=row_idx, column=1, columnspan=1, sticky="ew", padx=5, pady=5)
         self.libre_mirror_combo.bind("<<ComboboxSelected>>", self.on_online_translator_selection_change)
@@ -422,39 +424,37 @@ class CaptionerUI:
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_api_key_label = ttk.Label(self.engine_params_frame, text="API Key")
         self.transl_api_key_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_api_key_var = tk.StringVar(value="")
+        self.transl_api_key_var = tk.StringVar()
         self.transl_api_key_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_key_var)
         self.transl_api_key_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_api_secret_label = ttk.Label(self.engine_params_frame, text="API Secret")
         self.transl_api_secret_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_api_secret_var = tk.StringVar(value="")
+        self.transl_api_secret_var = tk.StringVar()
         self.transl_api_secret_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_secret_var)
         self.transl_api_secret_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_client_id_label = ttk.Label(self.engine_params_frame, text="Client/App ID")
         self.transl_client_id_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_client_id_var = tk.StringVar(value="")
+        self.transl_client_id_var = tk.StringVar()
         self.transl_client_id_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_client_id_var)
         self.transl_client_id_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_region_label = ttk.Label(self.engine_params_frame, text="Region")
         self.transl_region_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_region_var = tk.StringVar(value="")
+        self.transl_region_var = tk.StringVar()
         self.transl_region_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_region_var)
         self.transl_region_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_domain_label = ttk.Label(self.engine_params_frame, text="Domain")
         self.transl_domain_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_domain_var = tk.StringVar(value="general")
+        self.transl_domain_var = tk.StringVar()
         self.transl_domain_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_domain_var)
         self.transl_domain_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-
-        self.transl_engine_combo.event_generate("<<ComboboxSelected>>")
 
         # +++ Audio tab +++
         audio_tab = ttk.Frame(settings_notebook, padding=10)
@@ -467,7 +467,6 @@ class CaptionerUI:
         self.device_map = list_unique_input_devices()
         device_list = list(self.device_map.keys())
         dev_combo_width = max(len(v) for v in device_list)
-        dev_name, api_name = default_input_device(self.device_map)
 
         # === Audio device 1 ===
         dev1_tab = ttk.Frame(devices_notebook, padding=10)
@@ -477,7 +476,7 @@ class CaptionerUI:
         ttk.Label(dev1_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_combo_1 = ttk.Combobox(dev1_tab, values=device_list, width=dev_combo_width, state="readonly")
         self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-        self.audio_device_combo_1.set(dev_name)
+        self.audio_device_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_1_selection_change)
 
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
@@ -488,12 +487,8 @@ class CaptionerUI:
         # Block duration / size
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-
-        # Slider
         self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_1_block_dur_change)
         self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
-
-        # Block size and duration label
         self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2))
         self.audio_device_block_dur_label_1.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
 
@@ -510,10 +505,10 @@ class CaptionerUI:
         ttk.Label(dev2_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         self.audio_device_combo_2 = ttk.Combobox(dev2_tab, values=device_list, width=dev_combo_width, state="disabled")
         self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-        self.audio_device_combo_2.set(dev_name)
+        self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
 
         # Checkbox for enabling the second device
-        self.use_second_audio_dev_var = tk.BooleanVar(value=False)
+        self.use_second_audio_dev_var = tk.BooleanVar()
         self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
         self.use_second_audio_dev_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
@@ -526,12 +521,8 @@ class CaptionerUI:
         # Block duration / size
         row_idx = self.next_row(dev2_tab)
         ttk.Label(dev2_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-
-        # Slider
-        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_2_block_dur_change)
+        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, state="disabled", command=self.on_audio_device_2_block_dur_change)
         self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
-
-        # Block size and duration label
         self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2), state="disabled")
         self.audio_device_block_dur_label_2.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
 
@@ -543,11 +534,11 @@ class CaptionerUI:
         # === Common audio settings ===
         row_idx = self.next_row(audio_tab)
         ttk.Label(audio_tab, text="Audio chunk size (s)").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_chunk_size_var = tk.DoubleVar(value=0.4)
+        self.audio_chunk_size_var = tk.DoubleVar()
         self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.audio_chunk_size_var,
                                                   command=lambda val: self.audio_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.audio_chunk_size_label = ttk.Label(audio_tab, text=f"{self.audio_chunk_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.audio_chunk_size_label = ttk.Label(audio_tab, text="--", width=5, relief="flat", anchor="center")
         self.audio_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # +++ Captions tab +++
@@ -558,19 +549,19 @@ class CaptionerUI:
         self.show_captions_overlay_btn.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(captions_tab)
         ttk.Label(captions_tab, text="Font size").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.captions_font_size_var = tk.IntVar(value=24)
+        self.captions_font_size_var = tk.IntVar()
         self.captions_font_size_slider = tk.Scale(captions_tab, from_=12, to=72, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_font_size_var,
                                                   command=lambda val: self.captions_font_size_label.config(text=f"{int(val)}"))
         self.captions_font_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.captions_font_size_label = ttk.Label(captions_tab, text=f"{self.captions_font_size_var.get()}", width=5, relief="flat", anchor="center")
+        self.captions_font_size_label = ttk.Label(captions_tab, text="--", width=5, relief="flat", anchor="center")
         self.captions_font_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(captions_tab)
         ttk.Label(captions_tab, text="Max visible lines").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.captions_max_visible_lines_var = tk.IntVar(value=4)
+        self.captions_max_visible_lines_var = tk.IntVar()
         self.captions_max_visible_lines_slider = tk.Scale(captions_tab, from_=2, to=8, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_max_visible_lines_var,
                                                   command=lambda val: self.captions_max_visible_lines_label.config(text=f"{int(val)}"))
         self.captions_max_visible_lines_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.captions_max_visible_lines_label = ttk.Label(captions_tab, text=f"{self.captions_max_visible_lines_var.get()}", width=5, relief="flat", anchor="center")
+        self.captions_max_visible_lines_label = ttk.Label(captions_tab, text="--", width=5, relief="flat", anchor="center")
         self.captions_max_visible_lines_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         # --- Stats ---
@@ -684,34 +675,54 @@ class CaptionerUI:
         buttons_frame = ttk.Frame(root)
         buttons_frame.grid(row=row_idx, column=0, columnspan=3, sticky="e", padx=5, pady=5)
 
+        self.restore_defaults_btn = ttk.Button(buttons_frame, text="Restore defaults", command=self.on_restore_defaults)
+        self.restore_defaults_btn.grid(row=0, column=2, sticky="e", padx=5, pady=5)
+
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
         self.quit_btn.grid(row=0, column=3, sticky="e", padx=5, pady=5)
 
-        # Update block duration / size labels
-        self.audio_device_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_1_selection_change)
-        self.audio_device_combo_1.event_generate("<<ComboboxSelected>>")
-        self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
-        self.audio_device_combo_2.event_generate("<<ComboboxSelected>>")
-        self.audio_device_block_dur_slider_2.config(state="disabled")   # Disable it here because its value needs to be set first
-
         root.protocol("WM_DELETE_WINDOW", self.quit)
+        self.apply_settings_to_ui()
 
-    def show_modal_message(self, title, message, parent):
+    def show_modal_message(self, title, message, parent, confirm=False):
         # Create a modal Toplevel window
         win = tk.Toplevel(parent)
         win.title(title)
         win.transient(parent)   # Keep on top of parent
         win.grab_set()          # Make modal
         win.resizable(False, False)  # Disable resizing
+        result = {"value": False}
 
         # Message text
         label = ttk.Label(win, text=message, padding=(20, 20))
         label.pack()
 
-        # OK button
-        btn = ttk.Button(win, text="OK", command=win.destroy, width=10)
-        btn.pack(pady=10)
-        btn.focus_set()
+        # Buttons
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(pady=10)
+
+        if confirm:
+            def on_yes():
+                result["value"] = True
+                win.destroy()
+
+            def on_cancel():
+                result["value"] = False
+                win.destroy()
+
+            yes_btn = ttk.Button(btn_frame, text="Yes", command=on_yes, width=10)
+            yes_btn.pack(side="left", padx=4)
+            cancel_btn = ttk.Button(btn_frame, text="Cancel", command=on_cancel, width=10)
+            cancel_btn.pack(side="left", padx=4)
+            yes_btn.focus_set()
+        else:
+            def on_ok():
+                result["value"] = True
+                win.destroy()
+
+            btn = ttk.Button(btn_frame, text="OK", command=on_ok, width=10)
+            btn.pack()
+            btn.focus_set()
 
         # Center relative to parent
         win.update_idletasks()
@@ -720,6 +731,254 @@ class CaptionerUI:
         win.geometry(f"+{x}+{y}")
 
         parent.wait_window(win)  # Wait until this window is closed
+        return result["value"]
+
+    def load_settings_from_file(self):
+        if not self.settings_file.exists():
+            return
+
+        try:
+            with self.settings_file.open("r", encoding="utf-8") as f:
+                saved_data = json.load(f)
+            self.client_settings = dataclass_from_dict(ClientSettings, saved_data.get("client"))
+            self.pipeline_settings = dataclass_from_dict(PipelineSettings, saved_data.get("server"))
+        except Exception:
+            logger.exception("Failed to load settings from %s", self.settings_file)
+
+    def save_settings_to_file(self):
+        data = {
+            "client": settings_to_dict(self.client_settings),
+            "server": settings_to_dict(self.pipeline_settings),
+        }
+        try:
+            with self.settings_file.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=True)
+        except Exception:
+            logger.exception("Failed to save settings to %s", self.settings_file)
+
+    def collect_client_settings_from_ui(self) -> ClientSettings:
+        settings = ClientSettings()
+        settings.host = self.server_url_var.get().strip()
+        port, valid = str_to_int(self.server_port_var.get())
+        settings.port = port if valid else settings.port
+        settings.audio.chunk_size_s = float(self.audio_chunk_size_var.get())
+        settings.audio.use_second_device = bool(self.use_second_audio_dev_var.get())
+
+        settings.audio.device_1.name = self.audio_device_combo_1.get().strip()
+        settings.audio.device_1.host_api = self.audio_device_host_api_combo_1.get().strip()
+        settings.audio.device_1.block_duration_s = float(self.audio_device_block_dur_slider_1.get())
+
+        settings.audio.device_2.name = self.audio_device_combo_2.get().strip()
+        settings.audio.device_2.host_api = self.audio_device_host_api_combo_2.get().strip()
+        settings.audio.device_2.block_duration_s = float(self.audio_device_block_dur_slider_2.get())
+
+        settings.captions_overlay.font_size = int(self.captions_font_size_var.get())
+        settings.captions_overlay.max_visible_lines = int(self.captions_max_visible_lines_var.get())
+        return settings
+
+    def collect_server_settings_from_ui(self) -> PipelineSettings:
+        threshold = self.threshold_var.get()
+        buffer_trimming = self.buffer_trimming_var.get()
+        buffer_trimming_sec = self.buffer_trimming_sec_var.get()
+        vac_min_chunk_size = self.vac_min_chunk_size_var.get()
+        vac_is_dynamic_chunk_size = self.vac_is_dynamic_chunk_size_var.get()
+        vad_start_threshold = self.vad_start_threshold_var.get()
+        vad_end_threshold = self.vad_end_threshold_var.get()
+        vad_min_silence_duration = self.vad_min_silence_duration_var.get()
+        vad_speech_pad_start = self.vad_speech_pad_start_var.get()
+        vad_speech_pad_end = self.vad_speech_pad_end_var.get()
+        vad_hangover_chunks = int(self.vad_hangover_chunks_var.get())
+
+        transl_engine = self.transl_engine_var.get()
+        transl_params = {}
+
+        if self.enable_translation_var.get():
+            if transl_engine in self.transl_engines_with_params:
+                transl_params["api_key"] = self.transl_api_key_var.get().strip()
+
+            if transl_engine == "Online Translators":
+                provider = self.online_translator_var.get()
+                transl_params["provider"] = provider
+                transl_params["api_key"] = self.transl_api_key_var.get().strip()
+                transl_params["api_secret"] = self.transl_api_secret_var.get().strip()
+                transl_params["client_id"] = self.transl_client_id_var.get().strip()
+                transl_params["domain"] = self.transl_domain_var.get().strip()
+                transl_params["region"] = self.transl_region_var.get().strip()
+                transl_params["libre_mirror"] = self.libre_mirror_var.get().strip() or self.libre_mirrors[0]
+
+        pl_set = PipelineSettings()
+        pl_set.zoom_url = self.zoom_url_var.get().strip()
+
+        pl_set.asr.model = self.model_var.get()
+        pl_set.asr.device = self.whisper_device_var.get()
+        pl_set.asr.compute_type = self.whisper_compute_type_var.get()
+        pl_set.asr.language = get_lang_code(self.lang_var.get(), "auto")
+        pl_set.asr.nsp_threshold = threshold
+        pl_set.asr.buffer_trimming = buffer_trimming
+        pl_set.asr.buffer_trimming_sec = buffer_trimming_sec
+
+        pl_set.vac.enable = bool(self.vac_var.get())
+        pl_set.vac.enable_whisper_internal_vad = bool(self.vad_var.get())
+        pl_set.vac.min_chunk_size_s = vac_min_chunk_size
+        pl_set.vac.is_dynamic_chunk_size = vac_is_dynamic_chunk_size
+        pl_set.vac.start_threshold = vad_start_threshold
+        pl_set.vac.end_threshold = vad_end_threshold
+        pl_set.vac.min_silence_duration_ms = int(vad_min_silence_duration * 1000)
+        pl_set.vac.speech_pad_start_ms = int(vad_speech_pad_start * 1000)
+        pl_set.vac.speech_pad_end_ms = int(vad_speech_pad_end * 1000)
+        pl_set.vac.hangover_chunks = vad_hangover_chunks
+
+        pl_set.translation.enable = bool(self.enable_translation_var.get())
+        pl_set.translation.src_language = pl_set.asr.language
+        pl_set.translation.target_language = get_target_lang_code(self.target_lang_var.get())
+        pl_set.translation.engine = transl_engine
+        pl_set.translation.engine_params = transl_params
+        pl_set.translation.word_increment = self.transl_word_increment_var.get()
+        pl_set.translation.source_diff_enabled = bool(self.source_diff_enabled_var.get())
+        pl_set.translation.target_diff_enabled = bool(self.target_diff_enabled_var.get())
+
+        # Set ASR task based on whether translation is enabled with Whisper and target language is English,
+        # in which case we can use Whisper's built-in translation capability.
+        if (
+            pl_set.translation.enable
+            and pl_set.translation.engine == "Whisper"
+            and pl_set.translation.target_language == "English"
+        ):
+            pl_set.asr.task = "translate"
+        else:
+            pl_set.asr.task = "transcribe"
+
+        return pl_set
+
+    def apply_settings_to_ui(self):
+        pl_set = self.pipeline_settings
+        cl_set = self.client_settings
+
+        self.server_url_var.set(cl_set.host)
+        self.server_port_var.set(str(cl_set.port))
+        self.zoom_url_var.set(pl_set.zoom_url or "")
+
+        self.model_var.set(pl_set.asr.model)
+        self.whisper_device_var.set(pl_set.asr.device)
+        self.whisper_compute_type_var.set(pl_set.asr.compute_type)
+        self.lang_var.set(get_lang_name(pl_set.asr.language, "English"))
+        self.threshold_var.set(pl_set.asr.nsp_threshold)
+        self.threshold_label.config(text=f"{pl_set.asr.nsp_threshold:.2f}")
+        self.buffer_trimming_var.set(pl_set.asr.buffer_trimming)
+        self.buffer_trimming_sec_var.set(pl_set.asr.buffer_trimming_sec)
+        self.buffer_trimming_sec_label.config(text=f"{pl_set.asr.buffer_trimming_sec:.1f}")
+
+        self.vac_var.set(bool(pl_set.vac.enable))
+        self.vad_var.set(bool(pl_set.vac.enable_whisper_internal_vad))
+        self.vac_min_chunk_size_var.set(pl_set.vac.min_chunk_size_s)
+        self.vac_min_chunk_size_label.config(text=f"{pl_set.vac.min_chunk_size_s:.1f}")
+        self.vac_is_dynamic_chunk_size_var.set(bool(pl_set.vac.is_dynamic_chunk_size))
+        self.vad_start_threshold_var.set(pl_set.vac.start_threshold)
+        self.vad_start_threshold_label.config(text=f"{pl_set.vac.start_threshold:.2f}")
+        self.vad_end_threshold_var.set(pl_set.vac.end_threshold)
+        self.vad_end_threshold_label.config(text=f"{pl_set.vac.end_threshold:.2f}")
+
+        vad_silence_s = pl_set.vac.min_silence_duration_ms / 1000.0
+        self.vad_min_silence_duration_var.set(vad_silence_s)
+        self.vad_min_silence_duration_label.config(text=f"{vad_silence_s:.1f}")
+
+        vad_pad_start_s = pl_set.vac.speech_pad_start_ms / 1000.0
+        self.vad_speech_pad_start_var.set(vad_pad_start_s)
+        self.vad_speech_pad_start_label.config(text=f"{vad_pad_start_s:.1f}")
+
+        vad_pad_end_s = pl_set.vac.speech_pad_end_ms / 1000.0
+        self.vad_speech_pad_end_var.set(vad_pad_end_s)
+        self.vad_speech_pad_end_label.config(text=f"{vad_pad_end_s:.1f}")
+
+        self.vad_hangover_chunks_var.set(pl_set.vac.hangover_chunks)
+        self.vad_hangover_chunks_label.config(text=f"{int(pl_set.vac.hangover_chunks)}")
+
+        self.enable_translation_var.set(bool(pl_set.translation.enable))
+        self.target_lang_var.set(get_target_lang_name(pl_set.translation.target_language, "Serbian Cyrillic"))
+        self.transl_engine_var.set(pl_set.translation.engine)
+        self.transl_word_increment_var.set(int(pl_set.translation.word_increment))
+        self.transl_word_increment_label.config(text=f"{int(pl_set.translation.word_increment)}")
+        self.source_diff_enabled_var.set(bool(pl_set.translation.source_diff_enabled))
+        self.target_diff_enabled_var.set(bool(pl_set.translation.target_diff_enabled))
+
+        engine_params = pl_set.translation.engine_params or {}
+        provider = engine_params.get("provider", self.online_translators[0])
+        if provider in self.online_translators:
+            self.online_translator_var.set(provider)
+        self.transl_api_key_var.set(engine_params.get("api_key", ""))
+        self.transl_api_secret_var.set(engine_params.get("api_secret", ""))
+        self.transl_client_id_var.set(engine_params.get("client_id", ""))
+        self.transl_domain_var.set(engine_params.get("domain", "general"))
+        self.transl_region_var.set(engine_params.get("region", ""))
+        libre_mirror = engine_params.get("libre_mirror", self.libre_mirrors[0])
+        if libre_mirror in self.libre_mirrors:
+            self.libre_mirror_var.set(libre_mirror)
+
+        self.on_enable_translation_toggle()
+        self.on_transl_engine_selection_change(None)
+
+        self.audio_chunk_size_var.set(float(cl_set.audio.chunk_size_s))
+        self.audio_chunk_size_label.config(text=f"{float(cl_set.audio.chunk_size_s):.1f}")
+
+        dev_name, _ = default_input_device(self.device_map)
+
+        dev1_name = cl_set.audio.device_1.name
+        if not dev1_name or dev1_name not in self.device_map:
+            dev1_name = dev_name
+        self.audio_device_combo_1.set(dev1_name)
+
+        host_api_values_1 = sort_api_by_preference(self.device_map[dev1_name].keys())
+        self.audio_device_host_api_combo_1["values"] = host_api_values_1
+        self.audio_device_block_dur_slider_1.config(state="normal") # Otherwise the value cannot be set.
+
+        host_api_1 = cl_set.audio.device_1.host_api
+        if host_api_1 and host_api_1 in host_api_values_1:
+            self.audio_device_host_api_combo_1.set(host_api_1)
+        else:
+            self.audio_device_host_api_combo_1.current(0)
+        self.audio_device_host_api_combo_1.event_generate("<<ComboboxSelected>>")
+        if (cl_set.audio.device_1.block_duration_s or 0.0) > 0.0:
+            self.audio_device_block_dur_slider_1.set(float(cl_set.audio.device_1.block_duration_s))
+
+        dev2_name = cl_set.audio.device_2.name
+        if not dev2_name or dev2_name not in self.device_map:
+            dev2_name = dev_name
+        self.audio_device_combo_2.set(dev2_name)
+
+        host_api_values_2 = sort_api_by_preference(self.device_map[dev2_name].keys())
+        self.audio_device_host_api_combo_2["values"] = host_api_values_2
+        self.audio_device_block_dur_slider_2.config(state="normal") # Otherwise the value cannot be set.
+
+        host_api_2 = cl_set.audio.device_2.host_api
+        if host_api_2 and host_api_2 in host_api_values_2:
+            self.audio_device_host_api_combo_2.set(host_api_2)
+        else:
+            self.audio_device_host_api_combo_2.current(0)
+        self.audio_device_host_api_combo_2.event_generate("<<ComboboxSelected>>")
+        if (cl_set.audio.device_2.block_duration_s or 0.0) > 0.0:
+            self.audio_device_block_dur_slider_2.set(float(cl_set.audio.device_2.block_duration_s))
+
+        self.use_second_audio_dev_var.set(bool(cl_set.audio.use_second_device))
+        self.on_enable_second_audio_device()
+
+        self.captions_font_size_var.set(int(cl_set.captions_overlay.font_size))
+        self.captions_font_size_label.config(text=f"{int(cl_set.captions_overlay.font_size)}")
+        self.captions_max_visible_lines_var.set(int(cl_set.captions_overlay.max_visible_lines))
+        self.captions_max_visible_lines_label.config(text=f"{int(cl_set.captions_overlay.max_visible_lines)}")
+
+    def on_restore_defaults(self):
+        if not self.show_modal_message(
+            "Restore defaults",
+            "Do you want to restore default client and pipeline settings?",
+            self.root_wnd,
+            confirm=True,
+        ):
+            return
+
+        self.pipeline_settings = PipelineSettings()
+        self.client_settings = ClientSettings()
+        self.apply_settings_to_ui()
+        self.save_settings_to_file()
 
     def toggle_connection(self):
         if self.is_connected_to_server:
@@ -755,6 +1014,9 @@ class CaptionerUI:
         self.stop_captions_overlay()
         self.stop_audio_producers()
         self.stop_whisper_client()
+        self.client_settings = self.collect_client_settings_from_ui()
+        self.pipeline_settings = self.collect_server_settings_from_ui()
+        self.save_settings_to_file()
         self.root_wnd.quit()
         self.root_wnd.destroy()
 
@@ -1053,18 +1315,6 @@ class CaptionerUI:
         if self.is_connected_to_server:
             return False
 
-        threshold = self.threshold_var.get()
-        buffer_trimming = self.buffer_trimming_var.get()
-        buffer_trimming_sec = self.buffer_trimming_sec_var.get()
-        vac_min_chunk_size = self.vac_min_chunk_size_var.get()
-        vac_is_dynamic_chunk_size = self.vac_is_dynamic_chunk_size_var.get()
-        vad_start_threshold = self.vad_start_threshold_var.get()
-        vad_end_threshold = self.vad_end_threshold_var.get()
-        vad_min_silence_duration = self.vad_min_silence_duration_var.get()
-        vad_speech_pad_start = self.vad_speech_pad_start_var.get()
-        vad_speech_pad_end = self.vad_speech_pad_end_var.get()
-        vad_hangover_chunks = int(self.vad_hangover_chunks_var.get())
-
         server_url = self.server_url_var.get().strip()
         if not server_url:
             return False
@@ -1074,31 +1324,19 @@ class CaptionerUI:
             logger.error(f"Invalid port number: {port}.")
             return False
 
-        transl_engine = self.transl_engine_var.get()
-        transl_params = {}
+        pl_set = self.collect_server_settings_from_ui()
 
-        if transl_engine in self.transl_engines_with_params:
-            transl_params["api_key"] = self.transl_api_key_var.get().strip()
+        transl_engine = pl_set.translation.engine
+        transl_params = pl_set.translation.engine_params or {}
 
-        provider = ""
-        if transl_engine == "Online Translators":
-            provider = self.online_translator_var.get()
-            transl_params["provider"] = provider
-            transl_params["api_key"] = self.transl_api_key_var.get().strip()
-            transl_params["api_secret"] = self.transl_api_secret_var.get().strip()
-            transl_params["client_id"] = self.transl_client_id_var.get().strip()
-            transl_params["domain"] = self.transl_domain_var.get().strip()
-            transl_params["region"] = self.transl_region_var.get().strip()
-            transl_params["libre_mirror"] = self.libre_mirror_var.get().strip() or self.libre_mirrors[0]
-
-        if self.enable_translation_var.get():
+        if pl_set.translation.enable:
             needs_key = transl_engine in self.transl_engines_with_params
             needs_secret = False
             needs_client_id = False
             needs_domain = False
 
             if transl_engine == "Online Translators":
-                provider = self.online_translator_var.get()
+                provider = transl_params.get("provider", "")
                 needs_key = (
                     provider in self.online_provider_api_key_required
                     or (provider == "Libre" and self.libre_mirror_key_required.get(self.libre_mirror_var.get(), False))
@@ -1120,49 +1358,9 @@ class CaptionerUI:
                 logger.error("QCRI translator requires a domain, but the Domain field is empty.")
                 return False
 
-        pl_set = PipelineSettings()
-        pl_set.zoom_url = self.zoom_url_var.get().strip()
-
-        pl_set.asr.model = self.model_var.get()
-        pl_set.asr.device = self.whisper_device_var.get()
-        pl_set.asr.compute_type = self.whisper_compute_type_var.get()
-        pl_set.asr.language = get_lang_code(self.lang_var.get(), "auto")
-        pl_set.asr.nsp_threshold = threshold
-        pl_set.asr.buffer_trimming = buffer_trimming
-        pl_set.asr.buffer_trimming_sec = buffer_trimming_sec
-
-        pl_set.vac.enable = bool(self.vac_var.get())
-        pl_set.vac.enable_whisper_internal_vad = bool(self.vad_var.get())
-        pl_set.vac.min_chunk_size_s = vac_min_chunk_size
-        pl_set.vac.is_dynamic_chunk_size = vac_is_dynamic_chunk_size
-        pl_set.vac.start_threshold = vad_start_threshold
-        pl_set.vac.end_threshold = vad_end_threshold
-        pl_set.vac.min_silence_duration_ms = int(vad_min_silence_duration * 1000)
-        pl_set.vac.speech_pad_start_ms = int(vad_speech_pad_start * 1000)
-        pl_set.vac.speech_pad_end_ms = int(vad_speech_pad_end * 1000)
-        pl_set.vac.hangover_chunks = vad_hangover_chunks
-
-        pl_set.translation.enable = bool(self.enable_translation_var.get())
-        pl_set.translation.src_language = pl_set.asr.language
-        pl_set.translation.target_language = get_target_lang_code(self.target_lang_var.get())
-        pl_set.translation.engine = transl_engine
-        pl_set.translation.engine_params = transl_params
-        pl_set.translation.word_increment = self.transl_word_increment_var.get()
-        pl_set.translation.source_diff_enabled = bool(self.source_diff_enabled_var.get())
-        pl_set.translation.target_diff_enabled = bool(self.target_diff_enabled_var.get())
-
-        # Set ASR task based on whether translation is enabled with Whisper and target language is English,
-        # in which case we can use Whisper's built-in translation capability.
-        if (
-            pl_set.translation.enable 
-            and pl_set.translation.engine == "Whisper"
-            and pl_set.translation.target_language == "English"
-        ):
-            pl_set.asr.task = "translate"
-        else:
-            pl_set.asr.task = "transcribe"
-
         self.pipeline_settings = pl_set
+        self.client_settings = self.collect_client_settings_from_ui()
+        self.save_settings_to_file()
 
         logger.info(f"Connecting to server {server_url}:{port}")
 

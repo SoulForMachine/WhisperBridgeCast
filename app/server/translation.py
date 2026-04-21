@@ -58,11 +58,19 @@ class Translator:
         self._prev_source_unconf_tokens: list[Token] = []
         self._prev_target_tokens: list[Token] = []
 
+        spacy_lang_code_map = {
+            "en": "en",
+            "de": "de",
+            "sr": "sr",
+            "sr-Latn": "sr",
+            "sr-Cyrl": "sr",
+        }
+
         import spacy
-        self.src_nlp = spacy.blank(self.src_lang)
+        self.src_nlp = spacy.blank(spacy_lang_code_map.get(self.src_lang, "en"))
         self.src_nlp.add_pipe("sentencizer")
 
-        self.dest_nlp = spacy.blank(self.target_lang)
+        self.dest_nlp = spacy.blank(spacy_lang_code_map.get(self.target_lang, "sr"))
         self.dest_nlp.add_pipe("sentencizer")
 
     FLUSH_TIMEOUT = 6

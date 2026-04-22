@@ -36,7 +36,7 @@ x MME driver on Windows cuts off device names (~31 chars I think), so reported a
 
 - Add status indicators for the 2 audio streams.
 - Add rescan button to refresh the audio device list.
-- Save gui settings to a file. Add restore default button.
+x Save gui settings to a file. Add restore default button.
 - What if the start of a wrapped line that has scrolled out of the overlay is changed?
 
 ## Refactoring
@@ -71,8 +71,8 @@ x (solved with VAC improvements) Add padding from the next audio chunk if necess
 - Starting the server pipeline separatly from UI.
 - After connection is established, server should send to client all available ASR and translation backends info: engine, models, online service, supported languages, needed parameters...
 - The client should be able to send updated individual settings or restart parts of the server pipeline.
-- Use slower but better translation in a second pass?
-- Start transcription inference asynchronously, so chunks can be processed one by one.
+- Use slower but better translation in a second pass? This would be done with an LLM.
+- Research the posibility of asynchronous transcription inference.
 - Send sentence audio timestamp to all consumers.
 - Retranslate partial sentences after certain number of words added; or don't and just remove word_increment. (related to sending transcript and translation separatly)
 - See what can be done about unconfirmed text that span two sentences, like in:
@@ -80,3 +80,4 @@ x (solved with VAC improvements) Add padding from the next audio chunk if necess
 - If translation processing is slow there might be multiple jobs of the same partial sentence queued. Try skipping unnecessary ones.
 - Whisper sometimes alternates between two words in consecutive inferences. Try preventing stalling confirmation by picking the word with greater probability.
 - See how audio stream buffering can be improved: VACProcessor, Processor, VADIterator.
+- Think if sentencizer and VAC should be separate pipeline components.

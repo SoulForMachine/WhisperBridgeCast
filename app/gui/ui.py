@@ -27,6 +27,7 @@ from app.common.languages import (
     get_lang_code, get_lang_name, get_lang_name_list,
     get_target_lang_code, get_target_lang_name, get_target_lang_name_list
 )
+from app.gui.settings_tracker import SettingsDeltaTracker
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class CaptionerUI:
         self.whisper_client = None
         self.captions_overlay = None
         self.stats: Stats = None
+        self.pl_settings_tracker = SettingsDeltaTracker()
         self.setup_ui()
 
         self.gui_queue = queue.Queue()
@@ -107,11 +109,11 @@ class CaptionerUI:
         # --- Whisper Server URL ---
         row_idx = self.next_row(url_frame)
         ttk.Label(url_frame, text="Whisper Server URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.server_url_var = tk.StringVar()
-        self.server_url_entry = ttk.Entry(url_frame, textvariable=self.server_url_var)
+        self.cl_host_var = tk.StringVar()
+        self.server_url_entry = ttk.Entry(url_frame, textvariable=self.cl_host_var)
         self.server_url_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
-        self.server_port_var = tk.StringVar()
-        self.server_port_entry = ttk.Entry(url_frame, textvariable=self.server_port_var, width=6)
+        self.cl_port_var = tk.StringVar()
+        self.server_port_entry = ttk.Entry(url_frame, textvariable=self.cl_port_var, width=6)
         self.server_port_entry.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
         self.connect_btn = ttk.Button(url_frame, text="Connect", command=self.toggle_connection)
         self.connect_btn.grid(row=row_idx, column=4, sticky="e", padx=5, pady=5)
@@ -119,10 +121,10 @@ class CaptionerUI:
         # --- Zoom URL ---
         row_idx = self.next_row(url_frame)
         ttk.Label(url_frame, text="Zoom URL").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.zoom_url_var = tk.StringVar()
-        self.zoom_url_entry = ttk.Entry(url_frame, textvariable=self.zoom_url_var)
+        self.pl_zoom_url_var = tk.StringVar()
+        self.zoom_url_entry = ttk.Entry(url_frame, textvariable=self.pl_zoom_url_var)
         self.zoom_url_entry.grid(row=row_idx, column=1, columnspan=3, sticky="ew", padx=5, pady=5)
-        self.clear_btn = ttk.Button(url_frame, text="Clear", command=lambda: self.zoom_url_var.set(""))
+        self.clear_btn = ttk.Button(url_frame, text="Clear", command=lambda: self.pl_zoom_url_var.set(""))
         self.clear_btn.grid(row=row_idx, column=4, sticky="e", padx=5, pady=5)
 
         # --- Recording ---
@@ -169,14 +171,14 @@ class CaptionerUI:
         # === Speech language ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Speech language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.lang_var = tk.StringVar()
-        self.lang_combo = ttk.Combobox(whisper_general_tab, textvariable=self.lang_var, values=get_lang_name_list(), state="readonly")
+        self.pl_asr_language_var = tk.StringVar()
+        self.lang_combo = ttk.Combobox(whisper_general_tab, textvariable=self.pl_asr_language_var, values=get_lang_name_list(), state="readonly")
         self.lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper model ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Model").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.model_var = tk.StringVar()
+        self.pl_asr_model_var = tk.StringVar()
         model_options = [
             "tiny.en", "tiny",
             "base.en", "base",
@@ -184,29 +186,29 @@ class CaptionerUI:
             "medium.en", "distil-medium.en", "medium",
             "large-v1", "large-v2", "distil-large-v2", "large-v3", "distil-large-v3", "distil-large-v3.5", "large", "large-v3-turbo", "turbo"
         ]
-        self.model_combo = ttk.Combobox(whisper_general_tab, textvariable=self.model_var, values=model_options, state="readonly")
+        self.model_combo = ttk.Combobox(whisper_general_tab, textvariable=self.pl_asr_model_var, values=model_options, state="readonly")
         self.model_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper device ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Device").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.whisper_device_var = tk.StringVar()
-        self.whisper_device_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_device_var, values=["cuda", "cpu"], state="readonly")
+        self.pl_asr_device_var = tk.StringVar()
+        self.whisper_device_combo = ttk.Combobox(whisper_general_tab, textvariable=self.pl_asr_device_var, values=["cuda", "cpu"], state="readonly")
         self.whisper_device_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Whisper compute type ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Compute type").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.whisper_compute_type_var = tk.StringVar()
+        self.pl_asr_compute_type_var = tk.StringVar()
         dtypes = ["int8", "int8_float16", "float16", "float32"]
-        self.whisper_compute_type_combo = ttk.Combobox(whisper_general_tab, textvariable=self.whisper_compute_type_var, values=dtypes, state="readonly")
+        self.whisper_compute_type_combo = ttk.Combobox(whisper_general_tab, textvariable=self.pl_asr_compute_type_var, values=dtypes, state="readonly")
         self.whisper_compute_type_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         # === Non-speech probability threshold ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Non-speech threshold", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.threshold_var = tk.DoubleVar()
-        self.threshold_slider = tk.Scale(whisper_general_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.threshold_var,
+        self.pl_asr_nsp_threshold_var = tk.DoubleVar()
+        self.threshold_slider = tk.Scale(whisper_general_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.pl_asr_nsp_threshold_var,
                                          command=lambda val: self.threshold_label.config(text=f"{float(val):.2f}"))
         self.threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.threshold_label = ttk.Label(whisper_general_tab, text="--", width=5, relief="flat", anchor="center")
@@ -215,10 +217,10 @@ class CaptionerUI:
         # === Buffer trimming ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Buffer trimming").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.buffer_trimming_var = tk.StringVar()
+        self.pl_asr_buffer_trimming_var = tk.StringVar()
         self.buffer_trimming_combo = ttk.Combobox(
             whisper_general_tab,
-            textvariable=self.buffer_trimming_var,
+            textvariable=self.pl_asr_buffer_trimming_var,
             values=["segment", "sentence"],
             state="readonly"
         )
@@ -227,7 +229,7 @@ class CaptionerUI:
         # === Buffer trimming time ===
         row_idx = self.next_row(whisper_general_tab)
         ttk.Label(whisper_general_tab, text="Buffer trimming time (s)", justify="left", anchor="w").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.buffer_trimming_sec_var = tk.DoubleVar()
+        self.pl_asr_buffer_trimming_sec_var = tk.DoubleVar()
         self.buffer_trimming_sec_slider = tk.Scale(
             whisper_general_tab,
             from_=5.0,
@@ -235,7 +237,7 @@ class CaptionerUI:
             orient="horizontal",
             resolution=0.5,
             showvalue=False,
-            variable=self.buffer_trimming_sec_var,
+            variable=self.pl_asr_buffer_trimming_sec_var,
             command=lambda val: self.buffer_trimming_sec_label.config(text=f"{float(val):.1f}")
         )
         self.buffer_trimming_sec_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
@@ -244,36 +246,36 @@ class CaptionerUI:
 
         # === VAD/VAC ===
         row_idx = self.next_row(whisper_vad_tab)
-        self.vac_var = tk.BooleanVar()
-        self.vac_check = ttk.Checkbutton(whisper_vad_tab, text="Voice activity controller", variable=self.vac_var)
+        self.pl_vac_enable_var = tk.BooleanVar()
+        self.vac_check = ttk.Checkbutton(whisper_vad_tab, text="Voice activity controller", variable=self.pl_vac_enable_var)
         self.vac_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
-        self.vad_var = tk.BooleanVar()
-        self.vad_check = ttk.Checkbutton(whisper_vad_tab, text="Whisper's internal VAD", variable=self.vad_var)
+        self.pl_vac_enable_whisper_internal_vad_var = tk.BooleanVar()
+        self.vad_check = ttk.Checkbutton(whisper_vad_tab, text="Whisper's internal VAD", variable=self.pl_vac_enable_whisper_internal_vad_var)
         self.vad_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Min. chunk size (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vac_min_chunk_size_var = tk.DoubleVar()
-        self.vac_min_chunk_size_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.vac_min_chunk_size_var,
+        self.pl_vac_min_chunk_size_s_var = tk.DoubleVar()
+        self.vac_min_chunk_size_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.pl_vac_min_chunk_size_s_var,
                                                   command=lambda val: self.vac_min_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.vac_min_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vac_min_chunk_size_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
         self.vac_min_chunk_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
-        self.vac_is_dynamic_chunk_size_var = tk.BooleanVar()
-        self.vac_is_dynamic_chunk_size_check = ttk.Checkbutton(whisper_vad_tab, text="Dynamic", variable=self.vac_is_dynamic_chunk_size_var)
+        self.pl_vac_is_dynamic_chunk_size_var = tk.BooleanVar()
+        self.vac_is_dynamic_chunk_size_check = ttk.Checkbutton(whisper_vad_tab, text="Dynamic", variable=self.pl_vac_is_dynamic_chunk_size_var)
         self.vac_is_dynamic_chunk_size_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech start threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_start_threshold_var = tk.DoubleVar()
+        self.pl_vac_start_threshold_var = tk.DoubleVar()
         def start_threshold_slider_cmd(val):
-            low_val = self.vad_end_threshold_var.get()
+            low_val = self.pl_vac_end_threshold_var.get()
             if float(val) < low_val:
-                self.vad_start_threshold_var.set(low_val)
+                self.pl_vac_start_threshold_var.set(low_val)
                 val = low_val
             self.vad_start_threshold_label.config(text=f"{float(val):.2f}")
-        self.vad_start_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_start_threshold_var,
+        self.vad_start_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.pl_vac_start_threshold_var,
                                                    command=start_threshold_slider_cmd)
         self.vad_start_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_start_threshold_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -281,14 +283,14 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech end threshold").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_end_threshold_var = tk.DoubleVar()
+        self.pl_vac_end_threshold_var = tk.DoubleVar()
         def end_threshold_slider_cmd(val):
-            high_val = self.vad_start_threshold_var.get()
+            high_val = self.pl_vac_start_threshold_var.get()
             if float(val) > high_val:
-                self.vad_end_threshold_var.set(high_val)
+                self.pl_vac_end_threshold_var.set(high_val)
                 val = high_val
             self.vad_end_threshold_label.config(text=f"{float(val):.2f}")
-        self.vad_end_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.vad_end_threshold_var,
+        self.vad_end_threshold_slider = tk.Scale(whisper_vad_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.pl_vac_end_threshold_var,
                                                  command=end_threshold_slider_cmd)
         self.vad_end_threshold_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_end_threshold_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -296,8 +298,8 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Min. silence duration (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_min_silence_duration_var = tk.DoubleVar()
-        self.vad_min_silence_duration_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_min_silence_duration_var,
+        self.pl_vac_min_silence_duration_ms_var = tk.DoubleVar()
+        self.vad_min_silence_duration_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.pl_vac_min_silence_duration_ms_var,
                                                         command=lambda val: self.vad_min_silence_duration_label.config(text=f"{float(val):.1f}"))
         self.vad_min_silence_duration_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_min_silence_duration_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -305,8 +307,8 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech pad start (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_speech_pad_start_var = tk.DoubleVar()
-        self.vad_speech_pad_start_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_start_var,
+        self.pl_vac_speech_pad_start_ms_var = tk.DoubleVar()
+        self.vad_speech_pad_start_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.pl_vac_speech_pad_start_ms_var,
                                                     command=lambda val: self.vad_speech_pad_start_label.config(text=f"{float(val):.1f}"))
         self.vad_speech_pad_start_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_speech_pad_start_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -314,8 +316,8 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Speech pad end (s)").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_speech_pad_end_var = tk.DoubleVar()
-        self.vad_speech_pad_end_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.vad_speech_pad_end_var,
+        self.pl_vac_speech_pad_end_ms_var = tk.DoubleVar()
+        self.vad_speech_pad_end_slider = tk.Scale(whisper_vad_tab, from_=0.1, to=2.0, orient="horizontal", resolution=0.05, showvalue=False, variable=self.pl_vac_speech_pad_end_ms_var,
                                                   command=lambda val: self.vad_speech_pad_end_label.config(text=f"{float(val):.1f}"))
         self.vad_speech_pad_end_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_speech_pad_end_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -323,8 +325,8 @@ class CaptionerUI:
 
         row_idx = self.next_row(whisper_vad_tab)
         ttk.Label(whisper_vad_tab, text="Hangover chunks").grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
-        self.vad_hangover_chunks_var = tk.IntVar()
-        self.vad_hangover_chunks_slider = tk.Scale(whisper_vad_tab, from_=0, to=10, orient="horizontal", resolution=1, showvalue=False, variable=self.vad_hangover_chunks_var,
+        self.pl_vac_hangover_chunks_var = tk.IntVar()
+        self.vad_hangover_chunks_slider = tk.Scale(whisper_vad_tab, from_=0, to=10, orient="horizontal", resolution=1, showvalue=False, variable=self.pl_vac_hangover_chunks_var,
                                                    command=lambda val: self.vad_hangover_chunks_label.config(text=f"{int(float(val))}"))
         self.vad_hangover_chunks_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.vad_hangover_chunks_label = ttk.Label(whisper_vad_tab, text="--", width=5, relief="flat", anchor="center")
@@ -336,14 +338,14 @@ class CaptionerUI:
 
         # === Target language ===
         row_idx = self.next_row(translation_tab)
-        self.enable_translation_var = tk.BooleanVar()
-        self.enable_translation_check = ttk.Checkbutton(translation_tab, text="Enable translation", variable=self.enable_translation_var, command=self.on_enable_translation_toggle)
+        self.pl_translation_enable_var = tk.BooleanVar()
+        self.enable_translation_check = ttk.Checkbutton(translation_tab, text="Enable translation", variable=self.pl_translation_enable_var, command=self.on_enable_translation_toggle)
         self.enable_translation_check.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Target language").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.target_lang_var = tk.StringVar()
-        self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.target_lang_var, values=get_target_lang_name_list(), state="readonly")
+        self.pl_translation_target_language_var = tk.StringVar()
+        self.target_lang_combo = ttk.Combobox(translation_tab, textvariable=self.pl_translation_target_language_var, values=get_target_lang_name_list(), state="readonly")
         self.target_lang_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
 
         self.transl_engines = ["MarianMT", "NLLB", "EuroLLM", "Whisper", "Google Gemini", "Online Translators"]
@@ -374,14 +376,14 @@ class CaptionerUI:
         self.online_provider_region_supported = {"Microsoft"}
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Translation engine").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_engine_var = tk.StringVar()
-        self.transl_engine_combo = ttk.Combobox(translation_tab, textvariable=self.transl_engine_var, values=self.transl_engines, state="readonly")
+        self.pl_translation_engine_var = tk.StringVar()
+        self.transl_engine_combo = ttk.Combobox(translation_tab, textvariable=self.pl_translation_engine_var, values=self.transl_engines, state="readonly")
         self.transl_engine_combo.bind("<<ComboboxSelected>>", self.on_transl_engine_selection_change)
         self.transl_engine_combo.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
-        self.online_translator_var = tk.StringVar()
+        self.pl_translation_engine_params_provider_var = tk.StringVar()
         self.online_translator_combo = ttk.Combobox(
             translation_tab,
-            textvariable=self.online_translator_var,
+            textvariable=self.pl_translation_engine_params_provider_var,
             values=self.online_translators,
             state="readonly",
             width=14,
@@ -390,9 +392,9 @@ class CaptionerUI:
         self.online_translator_combo.grid(row=row_idx, column=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
-        self.transl_word_increment_var = tk.IntVar()
+        self.pl_translation_word_increment_var = tk.IntVar()
         ttk.Label(translation_tab, text="Word increment").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_word_increment_slider = tk.Scale(translation_tab, from_=0, to=15, orient="horizontal", resolution=1, showvalue=False, variable=self.transl_word_increment_var,
+        self.transl_word_increment_slider = tk.Scale(translation_tab, from_=0, to=15, orient="horizontal", resolution=1, showvalue=False, variable=self.pl_translation_word_increment_var,
                                                      command=lambda val: self.transl_word_increment_label.config(text=f"{int(val)}"))
         self.transl_word_increment_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.transl_word_increment_label = ttk.Label(translation_tab, text="--", width=5, relief="flat", anchor="center")
@@ -400,11 +402,11 @@ class CaptionerUI:
 
         row_idx = self.next_row(translation_tab)
         ttk.Label(translation_tab, text="Send diff:").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.source_diff_enabled_var = tk.BooleanVar()
-        self.source_diff_enabled_check = ttk.Checkbutton(translation_tab, text="source", variable=self.source_diff_enabled_var)
+        self.pl_translation_source_diff_enabled_var = tk.BooleanVar()
+        self.source_diff_enabled_check = ttk.Checkbutton(translation_tab, text="source", variable=self.pl_translation_source_diff_enabled_var)
         self.source_diff_enabled_check.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
-        self.target_diff_enabled_var = tk.BooleanVar()
-        self.target_diff_enabled_check = ttk.Checkbutton(translation_tab, text="target", variable=self.target_diff_enabled_var)
+        self.pl_translation_target_diff_enabled_var = tk.BooleanVar()
+        self.target_diff_enabled_check = ttk.Checkbutton(translation_tab, text="target", variable=self.pl_translation_target_diff_enabled_var)
         self.target_diff_enabled_check.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(translation_tab)
@@ -416,44 +418,44 @@ class CaptionerUI:
         row_idx = self.next_row(self.engine_params_frame)
         self.libre_mirror_label = ttk.Label(self.engine_params_frame, text="Libre mirror")
         self.libre_mirror_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.libre_mirror_var = tk.StringVar()
-        self.libre_mirror_combo = ttk.Combobox(self.engine_params_frame, textvariable=self.libre_mirror_var, values=self.libre_mirrors, state="readonly")
+        self.pl_translation_engine_params_libre_mirror_var = tk.StringVar()
+        self.libre_mirror_combo = ttk.Combobox(self.engine_params_frame, textvariable=self.pl_translation_engine_params_libre_mirror_var, values=self.libre_mirrors, state="readonly")
         self.libre_mirror_combo.grid(row=row_idx, column=1, columnspan=1, sticky="ew", padx=5, pady=5)
         self.libre_mirror_combo.bind("<<ComboboxSelected>>", self.on_online_translator_selection_change)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_api_key_label = ttk.Label(self.engine_params_frame, text="API Key")
         self.transl_api_key_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_api_key_var = tk.StringVar()
-        self.transl_api_key_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_key_var)
+        self.pl_translation_engine_params_api_key_var = tk.StringVar()
+        self.transl_api_key_entry = ttk.Entry(self.engine_params_frame, textvariable=self.pl_translation_engine_params_api_key_var)
         self.transl_api_key_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_api_secret_label = ttk.Label(self.engine_params_frame, text="API Secret")
         self.transl_api_secret_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_api_secret_var = tk.StringVar()
-        self.transl_api_secret_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_api_secret_var)
+        self.pl_translation_engine_params_api_secret_var = tk.StringVar()
+        self.transl_api_secret_entry = ttk.Entry(self.engine_params_frame, textvariable=self.pl_translation_engine_params_api_secret_var)
         self.transl_api_secret_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_client_id_label = ttk.Label(self.engine_params_frame, text="Client/App ID")
         self.transl_client_id_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_client_id_var = tk.StringVar()
-        self.transl_client_id_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_client_id_var)
+        self.pl_translation_engine_params_client_id_var = tk.StringVar()
+        self.transl_client_id_entry = ttk.Entry(self.engine_params_frame, textvariable=self.pl_translation_engine_params_client_id_var)
         self.transl_client_id_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_region_label = ttk.Label(self.engine_params_frame, text="Region")
         self.transl_region_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_region_var = tk.StringVar()
-        self.transl_region_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_region_var)
+        self.pl_translation_engine_params_region_var = tk.StringVar()
+        self.transl_region_entry = ttk.Entry(self.engine_params_frame, textvariable=self.pl_translation_engine_params_region_var)
         self.transl_region_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         row_idx = self.next_row(self.engine_params_frame)
         self.transl_domain_label = ttk.Label(self.engine_params_frame, text="Domain")
         self.transl_domain_label.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.transl_domain_var = tk.StringVar()
-        self.transl_domain_entry = ttk.Entry(self.engine_params_frame, textvariable=self.transl_domain_var)
+        self.pl_translation_engine_params_domain_var = tk.StringVar()
+        self.transl_domain_entry = ttk.Entry(self.engine_params_frame, textvariable=self.pl_translation_engine_params_domain_var)
         self.transl_domain_entry.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
 
         # +++ Audio tab +++
@@ -474,20 +476,23 @@ class CaptionerUI:
 
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_combo_1 = ttk.Combobox(dev1_tab, values=device_list, width=dev_combo_width, state="readonly")
+        self.cl_audio_device_1_name_var = tk.StringVar()
+        self.audio_device_combo_1 = ttk.Combobox(dev1_tab, textvariable=self.cl_audio_device_1_name_var, values=device_list, width=dev_combo_width, state="readonly")
         self.audio_device_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_1_selection_change)
 
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_host_api_combo_1 = ttk.Combobox(dev1_tab, values=[], state="readonly")
+        self.cl_audio_device_1_host_api_var = tk.StringVar()
+        self.audio_device_host_api_combo_1 = ttk.Combobox(dev1_tab, textvariable=self.cl_audio_device_1_host_api_var, values=[], state="readonly")
         self.audio_device_host_api_combo_1.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_1.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_1_selection_change)
 
         # Block duration / size
         row_idx = self.next_row(dev1_tab)
         ttk.Label(dev1_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, command=self.on_audio_device_1_block_dur_change)
+        self.cl_audio_device_1_block_duration_s_var = tk.DoubleVar()
+        self.audio_device_block_dur_slider_1 = tk.Scale(dev1_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.cl_audio_device_1_block_duration_s_var, command=self.on_audio_device_1_block_dur_change)
         self.audio_device_block_dur_slider_1.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
         self.audio_device_block_dur_label_1 = ttk.Label(dev1_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2))
         self.audio_device_block_dur_label_1.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
@@ -503,25 +508,28 @@ class CaptionerUI:
 
         row_idx = self.next_row(dev2_tab)
         ttk.Label(dev2_tab, text="Name").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_combo_2 = ttk.Combobox(dev2_tab, values=device_list, width=dev_combo_width, state="disabled")
+        self.cl_audio_device_2_name_var = tk.StringVar()
+        self.audio_device_combo_2 = ttk.Combobox(dev2_tab, textvariable=self.cl_audio_device_2_name_var, values=device_list, width=dev_combo_width, state="disabled")
         self.audio_device_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_2_selection_change)
 
         # Checkbox for enabling the second device
-        self.use_second_audio_dev_var = tk.BooleanVar()
-        self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.use_second_audio_dev_var, command=self.on_enable_second_audio_device)
+        self.cl_audio_use_second_device_var = tk.BooleanVar()
+        self.use_second_audio_dev_check = ttk.Checkbutton(dev2_tab, text="Use this device", variable=self.cl_audio_use_second_device_var, command=self.on_enable_second_audio_device)
         self.use_second_audio_dev_check.grid(row=row_idx, column=3, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(dev2_tab)
         ttk.Label(dev2_tab, text="Host API").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_host_api_combo_2 = ttk.Combobox(dev2_tab, values=[], state="disabled")
+        self.cl_audio_device_2_host_api_var = tk.StringVar()
+        self.audio_device_host_api_combo_2 = ttk.Combobox(dev2_tab, textvariable=self.cl_audio_device_2_host_api_var, values=[], state="disabled")
         self.audio_device_host_api_combo_2.grid(row=row_idx, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         self.audio_device_host_api_combo_2.bind("<<ComboboxSelected>>", self.on_audio_device_host_api_2_selection_change)
 
         # Block duration / size
         row_idx = self.next_row(dev2_tab)
         ttk.Label(dev2_tab, text="Block").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, state="disabled", command=self.on_audio_device_2_block_dur_change)
+        self.cl_audio_device_2_block_duration_s_var = tk.DoubleVar()
+        self.audio_device_block_dur_slider_2 = tk.Scale(dev2_tab, from_=0.0, to=1.0, orient="horizontal", resolution=0.01, showvalue=False, variable=self.cl_audio_device_2_block_duration_s_var, state="disabled", command=self.on_audio_device_2_block_dur_change)
         self.audio_device_block_dur_slider_2.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
         self.audio_device_block_dur_label_2 = ttk.Label(dev2_tab, text="Duration: \nSize: ", relief="flat", justify="left", anchor="w", padding=(4, 2), state="disabled")
         self.audio_device_block_dur_label_2.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
@@ -534,8 +542,8 @@ class CaptionerUI:
         # === Common audio settings ===
         row_idx = self.next_row(audio_tab)
         ttk.Label(audio_tab, text="Audio chunk size (s)").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.audio_chunk_size_var = tk.DoubleVar()
-        self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.audio_chunk_size_var,
+        self.cl_audio_chunk_size_s_var = tk.DoubleVar()
+        self.audio_chunk_size_slider = tk.Scale(audio_tab, from_=0.1, to=3.0, orient="horizontal", resolution=0.1, showvalue=False, variable=self.cl_audio_chunk_size_s_var,
                                                   command=lambda val: self.audio_chunk_size_label.config(text=f"{float(val):.1f}"))
         self.audio_chunk_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.audio_chunk_size_label = ttk.Label(audio_tab, text="--", width=5, relief="flat", anchor="center")
@@ -549,16 +557,16 @@ class CaptionerUI:
         self.show_captions_overlay_btn.grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(captions_tab)
         ttk.Label(captions_tab, text="Font size").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.captions_font_size_var = tk.IntVar()
-        self.captions_font_size_slider = tk.Scale(captions_tab, from_=12, to=72, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_font_size_var,
+        self.cl_captions_overlay_font_size_var = tk.IntVar()
+        self.captions_font_size_slider = tk.Scale(captions_tab, from_=12, to=72, orient="horizontal", resolution=1, showvalue=False, variable=self.cl_captions_overlay_font_size_var,
                                                   command=lambda val: self.captions_font_size_label.config(text=f"{int(val)}"))
         self.captions_font_size_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.captions_font_size_label = ttk.Label(captions_tab, text="--", width=5, relief="flat", anchor="center")
         self.captions_font_size_label.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
         row_idx = self.next_row(captions_tab)
         ttk.Label(captions_tab, text="Max visible lines").grid(row=row_idx, column=0, sticky="w", padx=5, pady=5)
-        self.captions_max_visible_lines_var = tk.IntVar()
-        self.captions_max_visible_lines_slider = tk.Scale(captions_tab, from_=2, to=8, orient="horizontal", resolution=1, showvalue=False, variable=self.captions_max_visible_lines_var,
+        self.cl_captions_overlay_max_visible_lines_var = tk.IntVar()
+        self.captions_max_visible_lines_slider = tk.Scale(captions_tab, from_=2, to=8, orient="horizontal", resolution=1, showvalue=False, variable=self.cl_captions_overlay_max_visible_lines_var,
                                                   command=lambda val: self.captions_max_visible_lines_label.config(text=f"{int(val)}"))
         self.captions_max_visible_lines_slider.grid(row=row_idx, column=1, sticky="ew", padx=5, pady=5)
         self.captions_max_visible_lines_label = ttk.Label(captions_tab, text="--", width=5, relief="flat", anchor="center")
@@ -682,7 +690,23 @@ class CaptionerUI:
         self.quit_btn.grid(row=0, column=3, sticky="e", padx=5, pady=5)
 
         root.protocol("WM_DELETE_WINDOW", self.quit)
+
         self.apply_settings_to_ui()
+
+        value_transforms = {
+            "asr.language": lambda value: get_lang_code(value, "auto"),
+            "vac.min_silence_duration_ms": lambda value: int(float(value) * 1000),
+            "vac.speech_pad_start_ms": lambda value: int(float(value) * 1000),
+            "vac.speech_pad_end_ms": lambda value: int(float(value) * 1000),
+            "translation.target_language": lambda value: get_target_lang_code(value),
+        }
+        self.pl_settings_tracker.bind_settings_to_vars(
+            settings=self.pipeline_settings,
+            tk_vars_obj=self,
+            var_prefix="pl_",
+            var_postfix="_var",
+            value_transforms=value_transforms
+        )
 
     def show_modal_message(self, title, message, parent, confirm=False):
         # Create a modal Toplevel window
@@ -758,67 +782,66 @@ class CaptionerUI:
 
     def collect_client_settings_from_ui(self) -> ClientSettings:
         settings = ClientSettings()
-        settings.host = self.server_url_var.get().strip()
-        port, valid = str_to_int(self.server_port_var.get())
+        settings.host = self.cl_host_var.get().strip()
+        port, valid = str_to_int(self.cl_port_var.get())
         settings.port = port if valid else settings.port
-        settings.audio.chunk_size_s = float(self.audio_chunk_size_var.get())
-        settings.audio.use_second_device = bool(self.use_second_audio_dev_var.get())
+        settings.audio.chunk_size_s = float(self.cl_audio_chunk_size_s_var.get())
+        settings.audio.use_second_device = bool(self.cl_audio_use_second_device_var.get())
 
-        settings.audio.device_1.name = self.audio_device_combo_1.get().strip()
-        settings.audio.device_1.host_api = self.audio_device_host_api_combo_1.get().strip()
-        settings.audio.device_1.block_duration_s = float(self.audio_device_block_dur_slider_1.get())
+        settings.audio.device_1.name = self.cl_audio_device_1_name_var.get().strip()
+        settings.audio.device_1.host_api = self.cl_audio_device_1_host_api_var.get().strip()
+        settings.audio.device_1.block_duration_s = float(self.cl_audio_device_1_block_duration_s_var.get())
 
-        settings.audio.device_2.name = self.audio_device_combo_2.get().strip()
-        settings.audio.device_2.host_api = self.audio_device_host_api_combo_2.get().strip()
-        settings.audio.device_2.block_duration_s = float(self.audio_device_block_dur_slider_2.get())
+        settings.audio.device_2.name = self.cl_audio_device_2_name_var.get().strip()
+        settings.audio.device_2.host_api = self.cl_audio_device_2_host_api_var.get().strip()
+        settings.audio.device_2.block_duration_s = float(self.cl_audio_device_2_block_duration_s_var.get())
 
-        settings.captions_overlay.font_size = int(self.captions_font_size_var.get())
-        settings.captions_overlay.max_visible_lines = int(self.captions_max_visible_lines_var.get())
+        settings.captions_overlay.font_size = int(self.cl_captions_overlay_font_size_var.get())
+        settings.captions_overlay.max_visible_lines = int(self.cl_captions_overlay_max_visible_lines_var.get())
         return settings
 
     def collect_server_settings_from_ui(self) -> PipelineSettings:
-        threshold = self.threshold_var.get()
-        buffer_trimming = self.buffer_trimming_var.get()
-        buffer_trimming_sec = self.buffer_trimming_sec_var.get()
-        vac_min_chunk_size = self.vac_min_chunk_size_var.get()
-        vac_is_dynamic_chunk_size = self.vac_is_dynamic_chunk_size_var.get()
-        vad_start_threshold = self.vad_start_threshold_var.get()
-        vad_end_threshold = self.vad_end_threshold_var.get()
-        vad_min_silence_duration = self.vad_min_silence_duration_var.get()
-        vad_speech_pad_start = self.vad_speech_pad_start_var.get()
-        vad_speech_pad_end = self.vad_speech_pad_end_var.get()
-        vad_hangover_chunks = int(self.vad_hangover_chunks_var.get())
+        threshold = self.pl_asr_nsp_threshold_var.get()
+        buffer_trimming = self.pl_asr_buffer_trimming_var.get()
+        buffer_trimming_sec = self.pl_asr_buffer_trimming_sec_var.get()
+        vac_min_chunk_size = self.pl_vac_min_chunk_size_s_var.get()
+        vac_is_dynamic_chunk_size = self.pl_vac_is_dynamic_chunk_size_var.get()
+        vad_start_threshold = self.pl_vac_start_threshold_var.get()
+        vad_end_threshold = self.pl_vac_end_threshold_var.get()
+        vad_min_silence_duration = self.pl_vac_min_silence_duration_ms_var.get()
+        vad_speech_pad_start = self.pl_vac_speech_pad_start_ms_var.get()
+        vad_speech_pad_end = self.pl_vac_speech_pad_end_ms_var.get()
+        vad_hangover_chunks = int(self.pl_vac_hangover_chunks_var.get())
 
-        transl_engine = self.transl_engine_var.get()
+        transl_engine = self.pl_translation_engine_var.get()
         transl_params = {}
 
-        if self.enable_translation_var.get():
+        if self.pl_translation_enable_var.get():
             if transl_engine in self.transl_engines_with_params:
-                transl_params["api_key"] = self.transl_api_key_var.get().strip()
+                transl_params["api_key"] = self.pl_translation_engine_params_api_key_var.get().strip()
 
             if transl_engine == "Online Translators":
-                provider = self.online_translator_var.get()
-                transl_params["provider"] = provider
-                transl_params["api_key"] = self.transl_api_key_var.get().strip()
-                transl_params["api_secret"] = self.transl_api_secret_var.get().strip()
-                transl_params["client_id"] = self.transl_client_id_var.get().strip()
-                transl_params["domain"] = self.transl_domain_var.get().strip()
-                transl_params["region"] = self.transl_region_var.get().strip()
-                transl_params["libre_mirror"] = self.libre_mirror_var.get().strip() or self.libre_mirrors[0]
+                transl_params["provider"] = self.pl_translation_engine_params_provider_var.get()
+                transl_params["api_key"] = self.pl_translation_engine_params_api_key_var.get().strip()
+                transl_params["api_secret"] = self.pl_translation_engine_params_api_secret_var.get().strip()
+                transl_params["client_id"] = self.pl_translation_engine_params_client_id_var.get().strip()
+                transl_params["domain"] = self.pl_translation_engine_params_domain_var.get().strip()
+                transl_params["region"] = self.pl_translation_engine_params_region_var.get().strip()
+                transl_params["libre_mirror"] = self.pl_translation_engine_params_libre_mirror_var.get().strip() or self.libre_mirrors[0]
 
         pl_set = PipelineSettings()
-        pl_set.zoom_url = self.zoom_url_var.get().strip()
+        pl_set.zoom_url = self.pl_zoom_url_var.get().strip()
 
-        pl_set.asr.model = self.model_var.get()
-        pl_set.asr.device = self.whisper_device_var.get()
-        pl_set.asr.compute_type = self.whisper_compute_type_var.get()
-        pl_set.asr.language = get_lang_code(self.lang_var.get(), "auto")
+        pl_set.asr.model = self.pl_asr_model_var.get()
+        pl_set.asr.device = self.pl_asr_device_var.get()
+        pl_set.asr.compute_type = self.pl_asr_compute_type_var.get()
+        pl_set.asr.language = get_lang_code(self.pl_asr_language_var.get(), "auto")
         pl_set.asr.nsp_threshold = threshold
         pl_set.asr.buffer_trimming = buffer_trimming
         pl_set.asr.buffer_trimming_sec = buffer_trimming_sec
 
-        pl_set.vac.enable = bool(self.vac_var.get())
-        pl_set.vac.enable_whisper_internal_vad = bool(self.vad_var.get())
+        pl_set.vac.enable = bool(self.pl_vac_enable_var.get())
+        pl_set.vac.enable_whisper_internal_vad = bool(self.pl_vac_enable_whisper_internal_vad_var.get())
         pl_set.vac.min_chunk_size_s = vac_min_chunk_size
         pl_set.vac.is_dynamic_chunk_size = vac_is_dynamic_chunk_size
         pl_set.vac.start_threshold = vad_start_threshold
@@ -828,14 +851,14 @@ class CaptionerUI:
         pl_set.vac.speech_pad_end_ms = int(vad_speech_pad_end * 1000)
         pl_set.vac.hangover_chunks = vad_hangover_chunks
 
-        pl_set.translation.enable = bool(self.enable_translation_var.get())
+        pl_set.translation.enable = bool(self.pl_translation_enable_var.get())
         pl_set.translation.src_language = pl_set.asr.language
-        pl_set.translation.target_language = get_target_lang_code(self.target_lang_var.get())
+        pl_set.translation.target_language = get_target_lang_code(self.pl_translation_target_language_var.get())
         pl_set.translation.engine = transl_engine
         pl_set.translation.engine_params = transl_params
-        pl_set.translation.word_increment = self.transl_word_increment_var.get()
-        pl_set.translation.source_diff_enabled = bool(self.source_diff_enabled_var.get())
-        pl_set.translation.target_diff_enabled = bool(self.target_diff_enabled_var.get())
+        pl_set.translation.word_increment = self.pl_translation_word_increment_var.get()
+        pl_set.translation.source_diff_enabled = bool(self.pl_translation_source_diff_enabled_var.get())
+        pl_set.translation.target_diff_enabled = bool(self.pl_translation_target_diff_enabled_var.get())
 
         # Set ASR task based on whether translation is enabled with Whisper and target language is English,
         # in which case we can use Whisper's built-in translation capability.
@@ -854,70 +877,70 @@ class CaptionerUI:
         pl_set = self.pipeline_settings
         cl_set = self.client_settings
 
-        self.server_url_var.set(cl_set.host)
-        self.server_port_var.set(str(cl_set.port))
-        self.zoom_url_var.set(pl_set.zoom_url or "")
+        self.cl_host_var.set(cl_set.host)
+        self.cl_port_var.set(str(cl_set.port))
+        self.pl_zoom_url_var.set(pl_set.zoom_url or "")
 
-        self.model_var.set(pl_set.asr.model)
-        self.whisper_device_var.set(pl_set.asr.device)
-        self.whisper_compute_type_var.set(pl_set.asr.compute_type)
-        self.lang_var.set(get_lang_name(pl_set.asr.language, "English"))
-        self.threshold_var.set(pl_set.asr.nsp_threshold)
+        self.pl_asr_model_var.set(pl_set.asr.model)
+        self.pl_asr_device_var.set(pl_set.asr.device)
+        self.pl_asr_compute_type_var.set(pl_set.asr.compute_type)
+        self.pl_asr_language_var.set(get_lang_name(pl_set.asr.language, "English"))
+        self.pl_asr_nsp_threshold_var.set(pl_set.asr.nsp_threshold)
         self.threshold_label.config(text=f"{pl_set.asr.nsp_threshold:.2f}")
-        self.buffer_trimming_var.set(pl_set.asr.buffer_trimming)
-        self.buffer_trimming_sec_var.set(pl_set.asr.buffer_trimming_sec)
+        self.pl_asr_buffer_trimming_var.set(pl_set.asr.buffer_trimming)
+        self.pl_asr_buffer_trimming_sec_var.set(pl_set.asr.buffer_trimming_sec)
         self.buffer_trimming_sec_label.config(text=f"{pl_set.asr.buffer_trimming_sec:.1f}")
 
-        self.vac_var.set(bool(pl_set.vac.enable))
-        self.vad_var.set(bool(pl_set.vac.enable_whisper_internal_vad))
-        self.vac_min_chunk_size_var.set(pl_set.vac.min_chunk_size_s)
+        self.pl_vac_enable_var.set(bool(pl_set.vac.enable))
+        self.pl_vac_enable_whisper_internal_vad_var.set(bool(pl_set.vac.enable_whisper_internal_vad))
+        self.pl_vac_min_chunk_size_s_var.set(pl_set.vac.min_chunk_size_s)
         self.vac_min_chunk_size_label.config(text=f"{pl_set.vac.min_chunk_size_s:.1f}")
-        self.vac_is_dynamic_chunk_size_var.set(bool(pl_set.vac.is_dynamic_chunk_size))
-        self.vad_start_threshold_var.set(pl_set.vac.start_threshold)
+        self.pl_vac_is_dynamic_chunk_size_var.set(bool(pl_set.vac.is_dynamic_chunk_size))
+        self.pl_vac_start_threshold_var.set(pl_set.vac.start_threshold)
         self.vad_start_threshold_label.config(text=f"{pl_set.vac.start_threshold:.2f}")
-        self.vad_end_threshold_var.set(pl_set.vac.end_threshold)
+        self.pl_vac_end_threshold_var.set(pl_set.vac.end_threshold)
         self.vad_end_threshold_label.config(text=f"{pl_set.vac.end_threshold:.2f}")
 
         vad_silence_s = pl_set.vac.min_silence_duration_ms / 1000.0
-        self.vad_min_silence_duration_var.set(vad_silence_s)
+        self.pl_vac_min_silence_duration_ms_var.set(vad_silence_s)
         self.vad_min_silence_duration_label.config(text=f"{vad_silence_s:.1f}")
 
         vad_pad_start_s = pl_set.vac.speech_pad_start_ms / 1000.0
-        self.vad_speech_pad_start_var.set(vad_pad_start_s)
+        self.pl_vac_speech_pad_start_ms_var.set(vad_pad_start_s)
         self.vad_speech_pad_start_label.config(text=f"{vad_pad_start_s:.1f}")
 
         vad_pad_end_s = pl_set.vac.speech_pad_end_ms / 1000.0
-        self.vad_speech_pad_end_var.set(vad_pad_end_s)
+        self.pl_vac_speech_pad_end_ms_var.set(vad_pad_end_s)
         self.vad_speech_pad_end_label.config(text=f"{vad_pad_end_s:.1f}")
 
-        self.vad_hangover_chunks_var.set(pl_set.vac.hangover_chunks)
+        self.pl_vac_hangover_chunks_var.set(pl_set.vac.hangover_chunks)
         self.vad_hangover_chunks_label.config(text=f"{int(pl_set.vac.hangover_chunks)}")
 
-        self.enable_translation_var.set(bool(pl_set.translation.enable))
-        self.target_lang_var.set(get_target_lang_name(pl_set.translation.target_language, "Serbian Cyrillic"))
-        self.transl_engine_var.set(pl_set.translation.engine)
-        self.transl_word_increment_var.set(int(pl_set.translation.word_increment))
+        self.pl_translation_enable_var.set(bool(pl_set.translation.enable))
+        self.pl_translation_target_language_var.set(get_target_lang_name(pl_set.translation.target_language, "Serbian Cyrillic"))
+        self.pl_translation_engine_var.set(pl_set.translation.engine)
+        self.pl_translation_word_increment_var.set(int(pl_set.translation.word_increment))
         self.transl_word_increment_label.config(text=f"{int(pl_set.translation.word_increment)}")
-        self.source_diff_enabled_var.set(bool(pl_set.translation.source_diff_enabled))
-        self.target_diff_enabled_var.set(bool(pl_set.translation.target_diff_enabled))
+        self.pl_translation_source_diff_enabled_var.set(bool(pl_set.translation.source_diff_enabled))
+        self.pl_translation_target_diff_enabled_var.set(bool(pl_set.translation.target_diff_enabled))
 
         engine_params = pl_set.translation.engine_params or {}
         provider = engine_params.get("provider", self.online_translators[0])
         if provider in self.online_translators:
-            self.online_translator_var.set(provider)
-        self.transl_api_key_var.set(engine_params.get("api_key", ""))
-        self.transl_api_secret_var.set(engine_params.get("api_secret", ""))
-        self.transl_client_id_var.set(engine_params.get("client_id", ""))
-        self.transl_domain_var.set(engine_params.get("domain", "general"))
-        self.transl_region_var.set(engine_params.get("region", ""))
+            self.pl_translation_engine_params_provider_var.set(provider)
+        self.pl_translation_engine_params_api_key_var.set(engine_params.get("api_key", ""))
+        self.pl_translation_engine_params_api_secret_var.set(engine_params.get("api_secret", ""))
+        self.pl_translation_engine_params_client_id_var.set(engine_params.get("client_id", ""))
+        self.pl_translation_engine_params_domain_var.set(engine_params.get("domain", "general"))
+        self.pl_translation_engine_params_region_var.set(engine_params.get("region", ""))
         libre_mirror = engine_params.get("libre_mirror", self.libre_mirrors[0])
         if libre_mirror in self.libre_mirrors:
-            self.libre_mirror_var.set(libre_mirror)
+            self.pl_translation_engine_params_libre_mirror_var.set(libre_mirror)
 
         self.on_enable_translation_toggle()
         self.on_transl_engine_selection_change(None)
 
-        self.audio_chunk_size_var.set(float(cl_set.audio.chunk_size_s))
+        self.cl_audio_chunk_size_s_var.set(float(cl_set.audio.chunk_size_s))
         self.audio_chunk_size_label.config(text=f"{float(cl_set.audio.chunk_size_s):.1f}")
 
         dev_name, _ = default_input_device(self.device_map)
@@ -925,7 +948,7 @@ class CaptionerUI:
         dev1_name = cl_set.audio.device_1.name
         if not dev1_name or dev1_name not in self.device_map:
             dev1_name = dev_name
-        self.audio_device_combo_1.set(dev1_name)
+        self.cl_audio_device_1_name_var.set(dev1_name)
 
         host_api_values_1 = sort_api_by_preference(self.device_map[dev1_name].keys())
         self.audio_device_host_api_combo_1["values"] = host_api_values_1
@@ -933,17 +956,18 @@ class CaptionerUI:
 
         host_api_1 = cl_set.audio.device_1.host_api
         if host_api_1 and host_api_1 in host_api_values_1:
-            self.audio_device_host_api_combo_1.set(host_api_1)
+            self.cl_audio_device_1_host_api_var.set(host_api_1)
         else:
-            self.audio_device_host_api_combo_1.current(0)
+            if host_api_values_1:
+                self.cl_audio_device_1_host_api_var.set(host_api_values_1[0])
         self.audio_device_host_api_combo_1.event_generate("<<ComboboxSelected>>")
         if (cl_set.audio.device_1.block_duration_s or 0.0) > 0.0:
-            self.audio_device_block_dur_slider_1.set(float(cl_set.audio.device_1.block_duration_s))
+            self.cl_audio_device_1_block_duration_s_var.set(float(cl_set.audio.device_1.block_duration_s))
 
         dev2_name = cl_set.audio.device_2.name
         if not dev2_name or dev2_name not in self.device_map:
             dev2_name = dev_name
-        self.audio_device_combo_2.set(dev2_name)
+        self.cl_audio_device_2_name_var.set(dev2_name)
 
         host_api_values_2 = sort_api_by_preference(self.device_map[dev2_name].keys())
         self.audio_device_host_api_combo_2["values"] = host_api_values_2
@@ -951,19 +975,20 @@ class CaptionerUI:
 
         host_api_2 = cl_set.audio.device_2.host_api
         if host_api_2 and host_api_2 in host_api_values_2:
-            self.audio_device_host_api_combo_2.set(host_api_2)
+            self.cl_audio_device_2_host_api_var.set(host_api_2)
         else:
-            self.audio_device_host_api_combo_2.current(0)
+            if host_api_values_2:
+                self.cl_audio_device_2_host_api_var.set(host_api_values_2[0])
         self.audio_device_host_api_combo_2.event_generate("<<ComboboxSelected>>")
         if (cl_set.audio.device_2.block_duration_s or 0.0) > 0.0:
-            self.audio_device_block_dur_slider_2.set(float(cl_set.audio.device_2.block_duration_s))
+            self.cl_audio_device_2_block_duration_s_var.set(float(cl_set.audio.device_2.block_duration_s))
 
-        self.use_second_audio_dev_var.set(bool(cl_set.audio.use_second_device))
+        self.cl_audio_use_second_device_var.set(bool(cl_set.audio.use_second_device))
         self.on_enable_second_audio_device()
 
-        self.captions_font_size_var.set(int(cl_set.captions_overlay.font_size))
+        self.cl_captions_overlay_font_size_var.set(int(cl_set.captions_overlay.font_size))
         self.captions_font_size_label.config(text=f"{int(cl_set.captions_overlay.font_size)}")
-        self.captions_max_visible_lines_var.set(int(cl_set.captions_overlay.max_visible_lines))
+        self.cl_captions_overlay_max_visible_lines_var.set(int(cl_set.captions_overlay.max_visible_lines))
         self.captions_max_visible_lines_label.config(text=f"{int(cl_set.captions_overlay.max_visible_lines)}")
 
     def on_restore_defaults(self):
@@ -1040,14 +1065,14 @@ class CaptionerUI:
         if self.is_recording or not self.is_connected_to_server:
             return
 
-        if self.use_second_audio_dev_var.get() and (self.audio_device_combo_1.get() == self.audio_device_combo_2.get()):
+        if self.cl_audio_use_second_device_var.get() and (self.cl_audio_device_1_name_var.get() == self.cl_audio_device_2_name_var.get()):
             self.show_modal_message("Error", "When the second audio device is enabled, different audio devices must be selected.", self.root_wnd)
             return
 
         info_str = (
-            f"Running AudioStreamProducer(s) and CaptionsReceiver...\n"
-            f"\t  Audio device: {self.audio_device_combo_1.get()}\n"
-            f"\t  Audio device 2: {self.audio_device_combo_2.get() if self.use_second_audio_dev_var.get() else 'N/A'}\n"
+            f"Running AudioStreamProducer(s)...\n"
+            f"\t  Audio device: {self.cl_audio_device_1_name_var.get()}\n"
+            f"\t  Audio device 2: {self.cl_audio_device_2_name_var.get() if self.cl_audio_use_second_device_var.get() else 'N/A'}\n"
         )
         logger.info(info_str)
 
@@ -1061,7 +1086,7 @@ class CaptionerUI:
             logger.info("Recording stopped.")
 
     def on_enable_translation_toggle(self):
-        if self.enable_translation_var.get():
+        if self.pl_translation_enable_var.get():
             self.target_lang_combo.config(state="readonly")
             self.transl_engine_combo.config(state="readonly")
             self.target_diff_enabled_check.config(state="normal")
@@ -1089,13 +1114,13 @@ class CaptionerUI:
             input_widget.config(state=state)
 
     def on_transl_engine_selection_change(self, event):
-        transl_model = self.transl_engine_var.get()
+        transl_model = self.pl_translation_engine_var.get()
         uses_online_translator = transl_model == "Online Translators"
-        provider = self.online_translator_var.get()
+        provider = self.pl_translation_engine_params_provider_var.get()
 
         if uses_online_translator:
             self.online_translator_combo.grid()
-            if self.enable_translation_var.get():
+            if self.pl_translation_enable_var.get():
                 self.online_translator_combo.config(state="readonly")
         else:
             self.online_translator_combo.grid_remove()
@@ -1104,7 +1129,7 @@ class CaptionerUI:
         if uses_online_translator:
             needs_api_key = (
                 provider in self.online_provider_api_key_required
-                or (provider == "Libre" and self.libre_mirror_key_required.get(self.libre_mirror_var.get(), False))
+                or (provider == "Libre" and self.libre_mirror_key_required.get(self.pl_translation_engine_params_libre_mirror_var.get(), False))
             )
 
         needs_api_secret = uses_online_translator and provider in self.online_provider_api_secret_required
@@ -1131,7 +1156,7 @@ class CaptionerUI:
 
         if has_any_params:
             self.engine_params_frame.grid()
-            api_state = "normal" if self.enable_translation_var.get() else "disabled"
+            api_state = "normal" if self.pl_translation_enable_var.get() else "disabled"
             self._set_param_row_state(self.transl_api_key_entry, api_state)
             self._set_param_row_state(self.transl_api_secret_entry, api_state)
             self._set_param_row_state(self.transl_client_id_entry, api_state)
@@ -1145,7 +1170,7 @@ class CaptionerUI:
         self.on_transl_engine_selection_change(None)
 
     def on_enable_second_audio_device(self):
-        if self.use_second_audio_dev_var.get():
+        if self.cl_audio_use_second_device_var.get():
             self.audio_device_combo_2.config(state="readonly")
             self.input_dev_info_label_2.config(state="normal")
             self.audio_device_host_api_combo_2.config(state="readonly")
@@ -1160,10 +1185,12 @@ class CaptionerUI:
         self.update_selected_devices_label()
 
     def on_audio_device_1_selection_change(self, event):
-        dev_name = self.audio_device_combo_1.get()
+        dev_name = self.cl_audio_device_1_name_var.get()
         api_map = self.device_map[dev_name]
         self.audio_device_host_api_combo_1['values'] = sort_api_by_preference(api_map.keys())
-        self.audio_device_host_api_combo_1.current(0)
+        host_api_values = self.audio_device_host_api_combo_1['values']
+        if host_api_values:
+            self.cl_audio_device_1_host_api_var.set(host_api_values[0])
         self.audio_device_host_api_combo_1.event_generate("<<ComboboxSelected>>")
         self.update_selected_devices_label()
 
@@ -1191,8 +1218,8 @@ class CaptionerUI:
         return info_text
 
     def on_audio_device_host_api_1_selection_change(self, event):
-        dev_name = self.audio_device_combo_1.get()
-        host_api = self.audio_device_host_api_combo_1.get()
+        dev_name = self.cl_audio_device_1_name_var.get()
+        host_api = self.cl_audio_device_1_host_api_var.get()
         caps, is_loopback = self.device_map[dev_name][host_api]
         dev_info = InputDeviceInfo(dev_name, host_api, caps, is_loopback)
         self.selected_device_1_info = dev_info
@@ -1206,19 +1233,21 @@ class CaptionerUI:
             to=max_allowed,
             resolution=0.001
         )
-        self.audio_device_block_dur_slider_1.set(dev_info.block_dur)
+        self.cl_audio_device_1_block_duration_s_var.set(dev_info.block_dur)
 
     def on_audio_device_2_selection_change(self, event):
-        dev_name = self.audio_device_combo_2.get()
+        dev_name = self.cl_audio_device_2_name_var.get()
         api_map = self.device_map[dev_name]
         self.audio_device_host_api_combo_2['values'] = sort_api_by_preference(api_map.keys())
-        self.audio_device_host_api_combo_2.current(0)
+        host_api_values = self.audio_device_host_api_combo_2['values']
+        if host_api_values:
+            self.cl_audio_device_2_host_api_var.set(host_api_values[0])
         self.audio_device_host_api_combo_2.event_generate("<<ComboboxSelected>>")
         self.update_selected_devices_label()
 
     def on_audio_device_host_api_2_selection_change(self, event):
-        dev_name = self.audio_device_combo_2.get()
-        host_api = self.audio_device_host_api_combo_2.get()
+        dev_name = self.cl_audio_device_2_name_var.get()
+        host_api = self.cl_audio_device_2_host_api_var.get()
         caps, is_loopback = self.device_map[dev_name][host_api]
         dev_info = InputDeviceInfo(dev_name, host_api, caps, is_loopback)
         self.selected_device_2_info = dev_info
@@ -1232,11 +1261,11 @@ class CaptionerUI:
             to=max_allowed,
             resolution=0.001
         )
-        self.audio_device_block_dur_slider_2.set(dev_info.block_dur)
+        self.cl_audio_device_2_block_duration_s_var.set(dev_info.block_dur)
 
     def on_audio_device_1_block_dur_change(self, value):
         dev_info = self.selected_device_1_info
-        dev_info.set_block_dur(self.audio_device_block_dur_slider_1.get())
+        dev_info.set_block_dur(self.cl_audio_device_1_block_duration_s_var.get())
         info_text = (
             f"Duration: {dev_info.block_dur * 1000:.0f} ms\n"
             f"Size: {dev_info.block_size} frames"
@@ -1245,7 +1274,7 @@ class CaptionerUI:
 
     def on_audio_device_2_block_dur_change(self, value):
         dev_info = self.selected_device_2_info
-        dev_info.set_block_dur(self.audio_device_block_dur_slider_2.get())
+        dev_info.set_block_dur(self.cl_audio_device_2_block_duration_s_var.get())
         info_text = (
             f"Duration: {dev_info.block_dur * 1000:.0f} ms\n"
             f"Size: {int(dev_info.block_size)} frames"
@@ -1273,8 +1302,8 @@ class CaptionerUI:
 
     def update_selected_devices_label(self):
         if not self.is_recording:
-            dev1_name = self.audio_device_combo_1.get()
-            dev2_name = self.audio_device_combo_2.get() if self.use_second_audio_dev_var.get() else "<none>"
+            dev1_name = self.cl_audio_device_1_name_var.get()
+            dev2_name = self.cl_audio_device_2_name_var.get() if self.cl_audio_use_second_device_var.get() else "<none>"
 
             info_text = (
                 f"Dev1: {dev1_name}\n\n"
@@ -1315,12 +1344,14 @@ class CaptionerUI:
         if self.is_connected_to_server:
             return False
 
-        server_url = self.server_url_var.get().strip()
+        server_url = self.cl_host_var.get().strip()
         if not server_url:
+            self.show_modal_message("Error", "Server URL cannot be empty.", self.root_wnd)
             return False
 
-        port, valid = str_to_int(self.server_port_var.get())
+        port, valid = str_to_int(self.cl_port_var.get())
         if not valid or not (0 < port < 65536):
+            self.show_modal_message("Error", "Invalid port number.", self.root_wnd)
             logger.error(f"Invalid port number: {port}.")
             return False
 
@@ -1339,7 +1370,7 @@ class CaptionerUI:
                 provider = transl_params.get("provider", "")
                 needs_key = (
                     provider in self.online_provider_api_key_required
-                    or (provider == "Libre" and self.libre_mirror_key_required.get(self.libre_mirror_var.get(), False))
+                    or (provider == "Libre" and self.libre_mirror_key_required.get(self.pl_translation_engine_params_libre_mirror_var.get(), False))
                 )
                 needs_secret = provider in self.online_provider_api_secret_required
                 needs_client_id = provider in self.online_provider_client_id_required
@@ -1390,8 +1421,8 @@ class CaptionerUI:
         if not self.captions_overlay:
             self.captions_overlay = CaptionsReceiver(
                 self.root_wnd, 
-                self.captions_font_size_var.get(), 
-                self.captions_max_visible_lines_var.get(),
+                self.cl_captions_overlay_font_size_var.get(), 
+                self.cl_captions_overlay_max_visible_lines_var.get(),
                 self.net_recv_queue, 
                 self.gui_queue
             )
@@ -1404,8 +1435,8 @@ class CaptionerUI:
             self.captions_overlay = None
 
     def create_audio_producer(self):
-        audio_chunk_size = self.audio_chunk_size_var.get()
-        use_second_dev = self.use_second_audio_dev_var.get()
+        audio_chunk_size = self.cl_audio_chunk_size_s_var.get()
+        use_second_dev = self.cl_audio_use_second_device_var.get()
         self.audio_producer_state_map.clear()
 
         if use_second_dev:
@@ -1590,7 +1621,7 @@ class CaptionerUI:
                 def on_stream_open():
                     self.record_btn.config(text="Stop")
                     self.mute_btn.config(state="normal")
-                    if self.use_second_audio_dev_var.get():
+                    if self.cl_audio_use_second_device_var.get():
                         self.mute_btn_2.config(state="normal")
                     self.show_captions_overlay_btn.config(state="normal")
                     self.is_recording = True

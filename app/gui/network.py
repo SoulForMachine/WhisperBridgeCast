@@ -16,13 +16,11 @@ class WhisperClient:
             self,
             server_url: str,
             port: int,
-            pipeline_settings: dict,
             net_send_queue: queue.Queue,
             net_recv_queue: queue.Queue,
             notif_callback: Callable[[str, dict], None]=None):
         self.server_url = server_url
         self.port = port
-        self.pipeline_settings = pipeline_settings
         self.net_send_queue = net_send_queue
         self.net_recv_queue = net_recv_queue
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
@@ -62,19 +60,11 @@ class WhisperClient:
         self.connected_event.set()
         self.notif_callback("client_status", {"status": "connected"})
 
-        # Step 1: send pipeline settings JSON
-        try:
-            netc.send_json(sock, self.pipeline_settings)
-        except Exception as e:
-            logger.error(f"Error sending pipeline settings to the server: {e}")
-            self.notif_callback("client_status", {"status": "params_send_error", "message": str(e)})
-            return
-
-        # Step 2: start a thread to receive results
+        # Start a thread to receive status, statistics and translation messages.
         self.results_thread = threading.Thread(target=self.listen_for_results, args=(sock,))
         self.results_thread.start()
 
-        # Step 3: stream audio
+        # Stream audio and control messages.
         try:
             while True:
                 data = self.net_send_queue.get()

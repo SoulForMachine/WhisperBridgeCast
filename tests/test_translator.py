@@ -56,6 +56,7 @@ def _collect_output(stop_event: threading.Event, out_q: queue.Queue, sink: list[
 
 def _build_translator(*, source_diff_enabled: bool = False, with_engine: bool = False) -> tuple[Translator, queue.Queue]:
     out_q: queue.Queue = queue.Queue()
+    callback_q: queue.Queue = queue.Queue()
     transl_settings = TranslationSettings(
         enable=True,
         src_language="en",
@@ -69,7 +70,7 @@ def _build_translator(*, source_diff_enabled: bool = False, with_engine: bool = 
         transl_settings=transl_settings,
         source_queue=queue.Queue(),
         output_queues=[out_q],
-        sender_queue=queue.Queue(),
+        sender_callback=callback_q.put,
         only_complete_sent=False,
     )
     tr.BACKEND_CLASSES = (DummyBackend,)
@@ -515,6 +516,7 @@ def test_target_diff_state_resets_after_complete() -> None:
 
 def test_transcription_only_pipeline_stream_emits_source_messages_without_target() -> None:
     out_q: queue.Queue = queue.Queue()
+    callback_q: queue.Queue = queue.Queue()
     transl_settings = TranslationSettings(
         enable=True,
         src_language="en",
@@ -528,7 +530,7 @@ def test_transcription_only_pipeline_stream_emits_source_messages_without_target
         transl_settings=transl_settings,
         source_queue=queue.Queue(),
         output_queues=[out_q],
-        sender_queue=queue.Queue(),
+        sender_callback=callback_q.put,
         only_complete_sent=False,
     )
 

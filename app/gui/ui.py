@@ -60,6 +60,8 @@ class CaptionerUI:
         self.load_settings_from_file()
         self.is_recording = False
         self.is_connected_to_server = False
+        self.is_pipeline_ready = False
+        self.is_pipeline_starting = False
         self.selected_device_1_info = None
         self.selected_device_2_info = None
         self.audio_producer = None
@@ -595,6 +597,8 @@ class CaptionerUI:
         net_server_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         self.net_server_status_label = ttk.Label(stats_frame, text="disconnected", anchor="w", justify="left")
         self.net_server_status_label.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+        self.pipeline_btn = ttk.Button(stats_frame, text="Start pipeline", command=self.toggle_pipeline, state="disabled")
+        self.pipeline_btn.grid(row=row_idx, column=2, sticky="w", padx=5, pady=5)
 
         row_idx = self.next_row(stats_frame)
         net_server_asr_label_frame = ttk.Frame(stats_frame)
@@ -1011,11 +1015,38 @@ class CaptionerUI:
         else:
             self.on_connect_to_server()
 
+    def toggle_pipeline(self):
+        if self.is_pipeline_ready:
+            self.on_stop_pipeline()
+        else:
+            self.on_start_pipeline()
+
     def toggle_recording(self):
         if self.is_recording:
             self.on_stop_recording()
         else:
             self.on_start_recording()
+
+    def update_record_button_state(self):
+        if not self.is_recording:
+            state = "normal" if self.is_connected_to_server and self.is_pipeline_ready else "disabled"
+            self.record_btn.config(state=state, text="Record")
+
+    def update_pipeline_button_state(self):
+        if not self.is_connected_to_server:
+            self.pipeline_btn.config(state="disabled", text="Start pipeline")
+        elif self.is_pipeline_starting:
+            self.pipeline_btn.config(state="disabled", text="Starting pipeline...")
+        elif self.is_pipeline_ready:
+            self.pipeline_btn.config(state="normal", text="Stop pipeline")
+        else:
+            self.pipeline_btn.config(state="normal", text="Start pipeline")
+
+    def set_pipeline_ready_state(self, is_ready: bool):
+        self.is_pipeline_ready = is_ready
+        self.is_pipeline_starting = False
+        self.update_pipeline_button_state()
+        self.update_record_button_state()
 
     def toggle_mute(self):
         if self.audio_producer:
@@ -1058,11 +1089,53 @@ class CaptionerUI:
             self.connect_btn.config(state="disabled")
             self.stop_whisper_client()
             self.connect_btn.config(state="normal", text="Connect")
-            self.record_btn.config(state="disabled", text="Record")
             self.is_connected_to_server = False
+            self.is_pipeline_starting = False
+            self.set_pipeline_ready_state(False)
+
+    def on_start_pipeline(self):
+        if not self.is_connected_to_server or self.is_pipeline_ready or self.is_pipeline_starting:
+            return
+
+        pipeline_settings = self.collect_validated_server_settings_from_ui()
+        if pipeline_settings is None:
+            return
+
+        self.pipeline_settings = pipeline_settings
+        self.client_settings = self.collect_client_settings_from_ui()
+        self.save_settings_to_file()
+
+        self.is_pipeline_starting = True
+        self.update_pipeline_button_state()
+        self.update_record_button_state()
+        self.net_server_status_label.config(text="starting pipeline...")
+        self.net_server_asr_status_indicator.set_state("uninitialized")
+        self.net_server_transl_status_indicator.set_state("uninitialized")
+        self.clear_net_server_stats(keep_status=True)
+        self.stats = Stats()
+        self.net_send_queue.put({
+            "type": "control",
+            "command": "start_pipeline",
+            "settings": asdict(pipeline_settings),
+        })
+
+    def on_stop_pipeline(self):
+        if not self.is_connected_to_server or not self.is_pipeline_ready:
+            return
+
+        self.on_stop_recording()
+        self.is_pipeline_starting = True
+        self.is_pipeline_ready = False
+        self.update_pipeline_button_state()
+        self.update_record_button_state()
+        self.net_server_status_label.config(text="stopping pipeline...")
+        self.net_send_queue.put({
+            "type": "control",
+            "command": "stop_pipeline",
+        })
 
     def on_start_recording(self):
-        if self.is_recording or not self.is_connected_to_server:
+        if self.is_recording or not self.is_connected_to_server or not self.is_pipeline_ready:
             return
 
         if self.cl_audio_use_second_device_var.get() and (self.cl_audio_device_1_name_var.get() == self.cl_audio_device_2_name_var.get()):
@@ -1311,8 +1384,9 @@ class CaptionerUI:
             )
             self.dev_label.config(text=info_text)
 
-    def clear_net_server_stats(self):
-        self.net_server_status_label.config(text="disconnected")
+    def clear_net_server_stats(self, keep_status: bool = False):
+        if not keep_status:
+            self.net_server_status_label.config(text="disconnected")
         self.net_server_asr_in_queue_progress.config(value=0)
         self.net_server_asr_in_queue_label.config(text="chunks queued: --")
         self.net_server_asr_vac_indicator.set_state("nonvoice")
@@ -1340,21 +1414,7 @@ class CaptionerUI:
         self.row_index_map[widget] += 1
         return i
 
-    def connect_to_server(self) -> bool:
-        if self.is_connected_to_server:
-            return False
-
-        server_url = self.cl_host_var.get().strip()
-        if not server_url:
-            self.show_modal_message("Error", "Server URL cannot be empty.", self.root_wnd)
-            return False
-
-        port, valid = str_to_int(self.cl_port_var.get())
-        if not valid or not (0 < port < 65536):
-            self.show_modal_message("Error", "Invalid port number.", self.root_wnd)
-            logger.error(f"Invalid port number: {port}.")
-            return False
-
+    def collect_validated_server_settings_from_ui(self) -> PipelineSettings | None:
         pl_set = self.collect_server_settings_from_ui()
 
         transl_engine = pl_set.translation.engine
@@ -1378,18 +1438,34 @@ class CaptionerUI:
 
             if needs_key and not transl_params.get("api_key"):
                 logger.error("Translation backend requires API key, but the API key field is empty.")
-                return False
+                return None
             if needs_secret and not transl_params.get("api_secret"):
                 logger.error("Translation backend requires API secret, but the API secret field is empty.")
-                return False
+                return None
             if needs_client_id and not transl_params.get("client_id"):
                 logger.error("Translation backend requires Client/App ID, but the field is empty.")
-                return False
+                return None
             if needs_domain and not transl_params.get("domain"):
                 logger.error("QCRI translator requires a domain, but the Domain field is empty.")
-                return False
+                return None
 
-        self.pipeline_settings = pl_set
+        return pl_set
+
+    def connect_to_server(self) -> bool:
+        if self.is_connected_to_server:
+            return False
+
+        server_url = self.cl_host_var.get().strip()
+        if not server_url:
+            self.show_modal_message("Error", "Server URL cannot be empty.", self.root_wnd)
+            return False
+
+        port, valid = str_to_int(self.cl_port_var.get())
+        if not valid or not (0 < port < 65536):
+            self.show_modal_message("Error", "Invalid port number.", self.root_wnd)
+            logger.error(f"Invalid port number: {port}.")
+            return False
+
         self.client_settings = self.collect_client_settings_from_ui()
         self.save_settings_to_file()
 
@@ -1400,7 +1476,6 @@ class CaptionerUI:
         self.whisper_client = WhisperClient(
             server_url,
             port,
-            asdict(pl_set),
             self.net_send_queue,
             self.net_recv_queue,
             self.whisper_client_callback
@@ -1561,14 +1636,17 @@ class CaptionerUI:
                     case "connecting":
                         def on_connecting():
                             self.net_server_status_label.config(text="connecting")
+                            self.is_pipeline_starting = False
+                            self.set_pipeline_ready_state(False)
                         self.gui_queue.put(on_connecting)
                     case "connected":
                         def on_connected():
                             self.is_connected_to_server = True
                             self.connect_btn.config(text="Disconnect", state="normal")
                             self.stats = Stats()
-                            self.net_server_status_label.config(text="connected")
                             self.net_server_status_indicator.set_state("connected")
+                            self.update_pipeline_button_state()
+                            self.update_record_button_state()
                         self.gui_queue.put(on_connected)
                     case "conn_lost" | "params_send_error":
                         self.gui_queue.put(on_disconnect_from_server)
@@ -1576,8 +1654,9 @@ class CaptionerUI:
                         def on_conn_error():
                             self.stop_whisper_client()
                             self.connect_btn.config(text="Connect", state="normal")
-                            self.record_btn.config(text="Record", state="disabled")
                             self.is_connected_to_server = False
+                            self.is_pipeline_starting = False
+                            self.set_pipeline_ready_state(False)
                             self.net_server_status_label.config(text="disconnected")
                             self.net_server_status_indicator.set_state("disconnected")
                             self.net_server_asr_status_indicator.set_state("uninitialized")
@@ -1591,10 +1670,23 @@ class CaptionerUI:
 
             case "server_status":
                 match data.get("status", ""):
+                    case "connected":
+                        def on_server_connected():
+                            self.set_pipeline_ready_state(False)
+                            self.net_server_status_label.config(text="connected")
+                            self.net_server_asr_status_indicator.set_state("uninitialized")
+                            self.net_server_transl_status_indicator.set_state("uninitialized")
+                            self.clear_net_server_stats(keep_status=True)
+                            self.stats = Stats()
+                        self.gui_queue.put(on_server_connected)
                     case "ready":
                         def on_ready():
-                            self.record_btn.config(text="Record", state="normal")
+                            if self.stats is None:
+                                self.stats = Stats()
+                            self.set_pipeline_ready_state(True)
                             self.net_server_status_label.config(text="ready")
+                            self.net_server_asr_status_indicator.set_state("ready")
+                            self.net_server_transl_status_indicator.set_state("ready")
                         self.gui_queue.put(on_ready)
                     case "translator_initializing":
                         def on_transl_init():

@@ -1,10 +1,9 @@
 from __future__ import annotations
 import logging
-import multiprocessing as mp
 import queue
 import threading
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from spacy.tokens import Token
 
@@ -27,7 +26,7 @@ class Translator:
         transl_settings: TranslationSettings,
         source_queue: MPCountingQueue,
         output_queues: list[queue.Queue],
-        sender_queue: queue.Queue,
+        sender_callback: Callable[[dict], None],
         only_complete_sent: bool
     ):
         self.transl_enabled = transl_settings.enable
@@ -38,7 +37,8 @@ class Translator:
         self.target_lang = transl_settings.target_language
         self.source_queue = source_queue
         self.output_queues = output_queues
-        self.sender_queue = sender_queue
+        self.output_queues_lock = threading.Lock()
+        self.sender_callback = sender_callback
         self.only_complete_sent = only_complete_sent
         self.confirmed_text = ""
         self.unconfirmed_text = ""
@@ -94,7 +94,7 @@ class Translator:
             last_sent = sentences[-1]
             buf_token_count = last_sent.num_tokens if not last_sent.complete else 0
 
-        self.sender_queue.put(
+        self.sender_callback(
             {
                 "type": "statistics",
                 "values": {
@@ -292,7 +292,7 @@ class Translator:
             source_diff_ops = []
         text_id = self._resolve_text_id(complete)
 
-        for out_q in self.output_queues.copy():
+        for out_q in self.get_output_queues_snapshot():
             out_q.put(
                 {
                     "id": text_id,
@@ -356,7 +356,7 @@ class Translator:
             else:
                 target_diff_ops = []
 
-            self.sender_queue.put(
+            self.sender_callback(
                 {
                     "type": "statistics",
                     "values": {
@@ -365,7 +365,7 @@ class Translator:
                 }
             )
 
-            for out_q in self.output_queues.copy():
+            for out_q in self.get_output_queues_snapshot():
                 out_q.put(
                     {
                         "id": job["id"],
@@ -420,14 +420,21 @@ class Translator:
                 self.engine = None
 
     def add_output_queue(self, q: queue.Queue):
-        self.output_queues.append(q)
+        with self.output_queues_lock:
+            if q not in self.output_queues:
+                self.output_queues.append(q)
 
     def remove_output_queue(self, q: queue.Queue):
-        if q in self.output_queues:
-            self.output_queues.remove(q)
+        with self.output_queues_lock:
+            if q in self.output_queues:
+                self.output_queues.remove(q)
+
+    def get_output_queues_snapshot(self) -> list[queue.Queue]:
+        with self.output_queues_lock:
+            return list(self.output_queues)
 
     def run_thread_main(self):
-        self.sender_queue.put({"type": "status", "value": {"status": "translator_initializing"}})
+        self.sender_callback({"type": "status", "value": {"status": "translator_initializing"}})
 
         self.initialize_engine()
 
@@ -435,7 +442,7 @@ class Translator:
             self.translation_thread = threading.Thread(target=self.translation_thread_main)
             self.translation_thread.start()
 
-        self.sender_queue.put({"type": "status", "value": {"status": "translator_initialized"}})
+        self.sender_callback({"type": "status", "value": {"status": "translator_initialized"}})
 
         self.transl_ready_event.set()
 
@@ -461,6 +468,8 @@ class Translator:
                 self.translate_and_send(to_translate)
 
     def wait_until_ready(self, timeout: float = None) -> bool:
+        if self.transl_ready_event is None:
+            return False
         return self.transl_ready_event.wait(timeout=timeout)
 
 

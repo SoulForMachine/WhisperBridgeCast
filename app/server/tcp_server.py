@@ -1,5 +1,5 @@
 import logging
-import multiprocessing as mp
+import queue
 import socket
 import threading
 
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 class WhisperServer:
     def __init__(self, host="0.0.0.0", port=5000, warmup_file=None):
-        self.conn = None
         self.server_thread = None
+        self.pipeline_start_thread = None
         self.is_running = False
         self.is_stopping = False
         self.host = host
@@ -24,6 +24,12 @@ class WhisperServer:
         self.listen_socket = None
         self.client_socket = None
         self.warmup_file = warmup_file
+        self.pipeline = None
+        self.pipeline_ready = False
+        self.pipeline_starting = False
+        self.pipeline_lock = threading.Lock()
+        self.client_sender_queue = None
+        self.client_sender_queue_lock = threading.Lock()
 
     def start(self):
         if not self.is_running:
@@ -43,6 +49,8 @@ class WhisperServer:
             if self.server_thread:
                 self.server_thread.join()
                 self.server_thread = None
+
+            self._stop_pipeline()
 
             self.listen_socket = None
             self.client_socket = None
@@ -70,43 +78,22 @@ class WhisperServer:
             self.is_running = False
 
     def handle_client(self, conn: socket.socket):
-        pipeline = None
-        wav_out = None
-        clean_shutdown = False
-        sender_queue = mp.Queue()
-        import json
+        client_sender_queue = queue.Queue()
+        sender_thread = None
 
         try:
-            # Start the sender thread.
-            sender_thread = threading.Thread(target=self.sender_thread_func, args=(conn, sender_queue))
+            with self.client_sender_queue_lock:
+                self.client_sender_queue = client_sender_queue
+
+            sender_thread = threading.Thread(target=self.sender_thread_func, args=(conn, client_sender_queue))
             sender_thread.start()
 
-            # Receive pipeline settings from the client and initialize the pipeline.
-            msg_type, pipeline_payload = netc.recv_message(conn)
-            if pipeline_payload is None or msg_type != "json":
-                logger.error("Failed to receive pipeline settings from the client.")
-                self._close_socket(conn)
-                return
-            logger.info(f"Received pipeline settings:\n{json.dumps(pipeline_payload, indent=2)}")
-
-            pipeline_settings = dataclass_from_dict(PipelineSettings, pipeline_payload)
-            if self.warmup_file:
-                pipeline_settings.asr.warmup_file = self.warmup_file
-
-            pipeline = WhisperPipeline(pipeline_settings, sender_queue)
-
-            # Start the wav file writer if needed.
-            if pipeline_settings.write_wav:
-                from app.server import wav_writer
-                from datetime import datetime
-
-                filename = datetime.now().strftime("recording-%Y%m%d_%H%M%S.wav")
-                wav_out = wav_writer.WavWriter(filename)
-
-            # When the pipeline is ready, inform the client.
-            pipeline.wait_until_ready()
-
-            netc.send_json(conn, {"type": "status", "value": {"status": "ready"}})
+            # Inform the client about the current server state.
+            client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
+            with self.pipeline_lock:
+                pipeline_ready = self.pipeline_ready
+            if pipeline_ready:
+                client_sender_queue.put({"type": "status", "value": {"status": "ready"}})
 
             # Receive audio chunks and control messages.
             while True:
@@ -119,23 +106,58 @@ class WhisperServer:
                     if len(msg) == 0:
                         continue
 
-                    # Send received chunk to the pipeline.
-                    pipeline.process(msg)
+                    with self.pipeline_lock:
+                        pipeline = self.pipeline
+                        pipeline_ready = self.pipeline_ready
 
-                    if pipeline_settings.write_wav:
-                        wav_out.write_chunk(msg)
+                    if pipeline is not None and pipeline_ready:
+                        pipeline.process(msg)
 
                 elif msg_type == "json":
                     if msg.get("type") == "control":
                         command = msg.get("command")
                         match command:
+                            case "start_pipeline":
+                                pipeline_payload = msg.get("settings")
+                                if pipeline_payload is None:
+                                    logger.error("Received start_pipeline without settings payload.")
+                                    continue
+
+                                with self.pipeline_lock:
+                                    can_start = self.pipeline is None and not self.pipeline_starting
+
+                                if can_start:
+                                    import json
+
+                                    logger.info(f"Received pipeline settings:\n{json.dumps(pipeline_payload, indent=2)}")
+                                    pipeline_settings = dataclass_from_dict(PipelineSettings, pipeline_payload)
+                                    self._start_pipeline_async(pipeline_settings)
+
+                            case "stop_pipeline":
+                                with self.pipeline_lock:
+                                    pipeline_ready = self.pipeline_ready
+                                if pipeline_ready:
+                                    self._stop_pipeline()
+                                    client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
+
                             case "start_sending_client_transcript":
-                                pipeline.start_sending_client_transcript()
+                                with self.pipeline_lock:
+                                    pipeline = self.pipeline
+                                    pipeline_ready = self.pipeline_ready
+                                if pipeline is not None and pipeline_ready:
+                                    pipeline.start_sending_client_transcript()
+
                             case "stop_sending_client_transcript":
-                                pipeline.stop_sending_client_transcript()
+                                with self.pipeline_lock:
+                                    pipeline = self.pipeline
+                                    pipeline_ready = self.pipeline_ready
+                                if pipeline is not None and pipeline_ready:
+                                    pipeline.stop_sending_client_transcript()
+
                             case "stop":
                                 logger.info("Client gracefully disconnecting.")
-                                clean_shutdown = True
+                                # Confirm shutdown request to the client.
+                                client_sender_queue.put({"type": "status", "value": {"status": "conn_shutdown"}})
                                 break
 
         except OSError as e:
@@ -144,26 +166,72 @@ class WhisperServer:
         except Exception as e:
             logger.error(f"Receiver exception: {e}.")
         finally:
-            # Stop the pipeline. This will flush any remaining text.
-            if pipeline:
-                pipeline.stop()
+            with self.client_sender_queue_lock:
+                if self.client_sender_queue is client_sender_queue:
+                    self.client_sender_queue = None
 
-            if clean_shutdown:
-                # Confirm shutdown request to the client.
-                sender_queue.put({"type": "status", "value": {"status": "conn_shutdown"}})
-
-            # Stop the sender thread.
-            sender_queue.put(None)
-            sender_thread.join()
+            if sender_thread is not None:
+                client_sender_queue.put(None)
+                sender_thread.join()
 
             # Close the connection.
             self._close_socket(conn)
             logger.info("Connection closed.")
 
-            if wav_out:
-                wav_out.close()
+    def _start_pipeline_async(self, pipeline_settings: PipelineSettings):
+        with self.pipeline_lock:
+            if self.pipeline is not None or self.pipeline_starting:
+                return
 
-    def sender_thread_func(self, conn: socket.socket, sender_queue: mp.Queue):
+            self.pipeline_starting = True
+            self.pipeline_ready = False
+            self.pipeline_start_thread = threading.Thread(
+                target=self._start_pipeline,
+                args=(pipeline_settings,),
+                daemon=True,
+            )
+            self.pipeline_start_thread.start()
+
+    def _start_pipeline(self, pipeline_settings: PipelineSettings):
+        if self.warmup_file:
+            pipeline_settings.asr.warmup_file = self.warmup_file
+
+        pipeline = WhisperPipeline(pipeline_settings, self._send_to_client)
+        pipeline.wait_until_ready()
+
+        with self.pipeline_lock:
+            self.pipeline = pipeline
+            self.pipeline_ready = True
+            self.pipeline_starting = False
+            self.pipeline_start_thread = None
+
+        self._send_to_client({"type": "status", "value": {"status": "ready"}})
+
+    def _stop_pipeline(self):
+        with self.pipeline_lock:
+            startup_thread = self.pipeline_start_thread
+            self.pipeline_ready = False
+            self.pipeline_starting = False
+
+        if startup_thread is not None and startup_thread.is_alive():
+            startup_thread.join()
+
+        with self.pipeline_lock:
+            pipeline = self.pipeline
+            self.pipeline = None
+            self.pipeline_ready = False
+
+        if pipeline is not None:
+            pipeline.stop()
+
+    def _send_to_client(self, message: dict):
+        with self.client_sender_queue_lock:
+            sender_queue = self.client_sender_queue
+
+        if sender_queue is not None:
+            sender_queue.put(message)
+
+    def sender_thread_func(self, conn: socket.socket, sender_queue: queue.Queue):
         try:
             while True:
                 msg = sender_queue.get()

@@ -107,6 +107,8 @@ class ASRProcessor:
             self.is_running = False
 
     def wait_until_ready(self, timeout: float = None) -> bool:
+        if self.asr_ready_event is None:
+            return False
         return self.asr_ready_event.wait(timeout=timeout)
 
 

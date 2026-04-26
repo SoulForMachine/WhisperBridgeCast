@@ -1,10 +1,10 @@
 import json
 import logging
-import multiprocessing as mp
 import os
 import queue
 import threading
 from urllib.parse import parse_qs, urlparse
+from typing import Callable
 
 import requests
 
@@ -101,9 +101,9 @@ class ZoomCaptionSender:
 class ClientCaptionSender:
     """Sends captions back to the client over the same TCP connection."""
 
-    def __init__(self, source_queue: queue.Queue, sender_queue: mp.Queue):
+    def __init__(self, source_queue: queue.Queue, sender_callback: Callable[[dict], None]):
         self.source_queue = source_queue
-        self.sender_queue = sender_queue
+        self.sender_callback = sender_callback
         self.caption_thread = None
         self.is_running = False
 
@@ -132,7 +132,7 @@ class ClientCaptionSender:
             if not text.strip():
                 continue
 
-            self.sender_queue.put(
+            self.sender_callback(
                 {
                     "type": "translation",
                     "lang": lang_code,

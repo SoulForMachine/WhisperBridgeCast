@@ -113,7 +113,7 @@ class WebTranscriptServer:
         self._entry_snapshots.clear()
         self._event_counter = 0
 
-    def wait_until_ready(self):
+    def wait_until_ready(self, timeout: float = None) -> bool:
         return True
 
     def add_text(self, message: dict):

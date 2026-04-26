@@ -36,17 +36,16 @@ class AudioStreamProducer:
 
         self.notif_callback = notif_callback if notif_callback else lambda et, d: None
 
+        self.started_event = None
         self.stop_event = None
         self.audio_thread = None
         self.is_running = False
 
     def pause_stream(self):
-        print(f"active: {self.stream.is_active()}, stopped: {self.stream.is_stopped()}")
         if self.stream and self.stream.is_active():
             self.stream.stop_stream()
 
     def resume_stream(self):
-        print(f"active: {self.stream.is_active()}, stopped: {self.stream.is_stopped()}")
         if self.stream and self.stream.is_stopped():
             self.stream.start_stream()
 
@@ -55,12 +54,16 @@ class AudioStreamProducer:
             return not self.stream.is_active()
         return False
 
-    def start(self):
+    def start(self) -> bool:
         if not self.is_running:
+            self.started_event = threading.Event()
             self.stop_event = threading.Event()
             self.audio_thread = threading.Thread(target=self.run)
             self.audio_thread.start()
-            self.is_running = True
+            self.started_event.wait()
+            return self.is_running
+
+        return False
 
     def stop(self):
         if self.is_running:
@@ -70,6 +73,8 @@ class AudioStreamProducer:
             self.audio_thread = None
             self.is_running = False
             self.stream = None
+            self.started_event = None
+            self.stop_event = None
 
     def downmix_mono(self, data: np.ndarray) -> np.ndarray:
         # Downmix by summing and normalizing.
@@ -129,6 +134,7 @@ class AudioStreamProducer:
         logger.info(info_str)
 
         p = pyaudio.PyAudio()
+        stream = None
 
         try:
             stream = p.open(
@@ -136,6 +142,7 @@ class AudioStreamProducer:
                 channels=self.dev_info.channels,
                 rate=int(self.dev_info.samplerate),
                 input=True,
+                start=False,
                 input_device_index=self.dev_info.index,
                 frames_per_buffer=self.dev_info.block_size,
                 stream_callback=self.audio_callback
@@ -147,6 +154,9 @@ class AudioStreamProducer:
             if self.dev_info.resample_needed:
                 import soxr
                 self.resample_stream = soxr.ResampleStream(self.dev_info.samplerate, WHISPER_SAMPLERATE, num_channels=1, dtype='float32', quality='LQ')
+
+            self.is_running = True
+            self.started_event.set()
 
             while not self.stop_event.is_set():
                 chunk = self.receive_audio_chunk()
@@ -160,13 +170,16 @@ class AudioStreamProducer:
                 self.output_queue.put(tail)
                 self.resample_stream = None
         except Exception as e:
-            logger.error(f"Audio stream error: {e}")
+            logger.error(f"Audio stream error ({self.dev_info.name}): {e}")
             self.notif_callback("stream_error", {"message": str(e), "device_info": self.dev_info})
         finally:
-            stream.stop_stream()
-            stream.close()
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
             p.terminate()
             self.notif_callback("stream_closed", {"device_info": self.dev_info})
+            self.is_running = False
+            self.started_event.set()
 
 
 class AudioSwitcher:

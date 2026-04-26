@@ -61,6 +61,7 @@ class WhisperClient:
 
         self.connected_event.set()
         self.notif_callback("client_status", {"status": "connected"})
+        logger.info(f"Connected to whisper server at {self.server_url}:{self.port}.")
 
         # Step 1: send pipeline settings JSON
         try:

@@ -1076,7 +1076,6 @@ class CaptionerUI:
         )
         logger.info(info_str)
 
-        # Succesfull start of AudioStreamProducer will start up the CaptionsReceiver as well, if necessary.
         self.create_audio_producer()
 
     def on_stop_recording(self):
@@ -1450,7 +1449,11 @@ class CaptionerUI:
                 self.audio_temp_queue_1,
                 self.audio_producer_callback
             )
-            self.audio_producer.start()
+            if not self.audio_producer.start():
+                logger.error("Failed to start audio producer for device 1.")
+                self.audio_producer = None
+                self.audio_temp_queue_1 = None
+                return
 
             self.audio_temp_queue_2 = queue.Queue()
             self.audio_producer_2 = AudioStreamProducer(
@@ -1459,13 +1462,22 @@ class CaptionerUI:
                 self.audio_temp_queue_2,
                 self.audio_producer_callback
             )
-            self.audio_producer_2.start()
+            if not self.audio_producer_2.start():
+                logger.error("Failed to start audio producer for device 2.")
+                self.audio_producer.stop()
+                self.audio_producer = None
+                self.audio_producer_2 = None
+                self.audio_temp_queue_1 = None
+                self.audio_temp_queue_2 = None
+                return
+
+            self.audio_producer.resume_stream()
+            self.audio_producer_2.resume_stream()
 
             self.audio_switcher = AudioSwitcher(
-                self.audio_temp_queue_1,
-                self.audio_temp_queue_2,
-                self.net_send_queue,
-                int(self.audio_producer_2.min_chunk_size * WHISPER_SAMPLERATE)
+                audio1_queue=self.audio_temp_queue_1,
+                audio2_queue=self.audio_temp_queue_2,
+                output_queue=self.net_send_queue,
             )
             self.audio_switcher.start()
         else:
@@ -1478,7 +1490,12 @@ class CaptionerUI:
                 self.net_send_queue,
                 self.audio_producer_callback
             )
-            self.audio_producer.start()
+            if not self.audio_producer.start():
+                logger.error("Failed to start audio producer.")
+                self.audio_producer = None
+                return
+
+            self.audio_producer.resume_stream()
 
     def stop_audio_producers(self):
         if self.audio_producer:

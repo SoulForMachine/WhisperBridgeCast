@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import queue
 import socket
 import threading

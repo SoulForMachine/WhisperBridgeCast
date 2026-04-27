@@ -1,4 +1,4 @@
-﻿import threading
+import threading
 
 from app.gui.widgets import captions_overlay
 

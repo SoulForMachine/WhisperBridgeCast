@@ -1036,7 +1036,7 @@ class CaptionerUI:
         if not self.is_connected_to_server:
             self.pipeline_btn.config(state="disabled", text="Start pipeline")
         elif self.is_pipeline_starting:
-            self.pipeline_btn.config(state="disabled", text="Starting pipeline...")
+            self.pipeline_btn.config(state="disabled", text="Starting...")
         elif self.is_pipeline_ready:
             self.pipeline_btn.config(state="normal", text="Stop pipeline")
         else:
@@ -1092,6 +1092,7 @@ class CaptionerUI:
             self.is_connected_to_server = False
             self.is_pipeline_starting = False
             self.set_pipeline_ready_state(False)
+            self.update_record_button_state()
 
     def on_start_pipeline(self):
         if not self.is_connected_to_server or self.is_pipeline_ready or self.is_pipeline_starting:
@@ -1670,6 +1671,17 @@ class CaptionerUI:
 
             case "server_status":
                 match data.get("status", ""):
+                    case "starting_pipeline":
+                        def on_starting_pipeline():
+                            self.set_pipeline_ready_state(False)
+                            self.is_pipeline_starting = True
+                            self.update_pipeline_button_state()
+                            self.net_server_status_label.config(text="starting pipeline")
+                            self.net_server_asr_status_indicator.set_state("initializing")
+                            self.net_server_transl_status_indicator.set_state("initializing")
+                            self.clear_net_server_stats(keep_status=True)
+                            self.stats = Stats()
+                        self.gui_queue.put(on_starting_pipeline)
                     case "connected":
                         def on_server_connected():
                             self.set_pipeline_ready_state(False)
@@ -1725,11 +1737,11 @@ class CaptionerUI:
 
             case "stream_closed" | "stream_error":
                 def on_stream_closed():
-                    self.record_btn.config(text="Record")
                     self.mute_btn.config(state="disabled", text="🔊")
                     self.mute_btn_2.config(state="disabled", text="🔊")
                     self.show_captions_overlay_btn.config(state="disabled", text="Show overlay")
                     self.is_recording = False
+                    self.update_record_button_state()
 
                 self.audio_producer_state_map[data["device_info"].index] = "closed"
                 # If second device is used, wait for both streams to be closed to update the UI.

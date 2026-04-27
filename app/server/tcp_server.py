@@ -92,8 +92,11 @@ class WhisperServer:
             client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
             with self.pipeline_lock:
                 pipeline_ready = self.pipeline_ready
+                pipeline_starting = self.pipeline_starting
             if pipeline_ready:
                 client_sender_queue.put({"type": "status", "value": {"status": "ready"}})
+            elif pipeline_starting:
+                client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
 
             # Receive audio chunks and control messages.
             while True:
@@ -191,6 +194,7 @@ class WhisperServer:
                 daemon=True,
             )
             self.pipeline_start_thread.start()
+            self.client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
 
     def _start_pipeline(self, pipeline_settings: PipelineSettings):
         if self.warmup_file:

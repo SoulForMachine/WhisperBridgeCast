@@ -106,6 +106,8 @@ class WhisperClient:
     def listen_for_results(self, sock):
         srv_status_strs = {
             "ready": "Server is ready to receive audio.",
+            "starting_pipeline": "Server pipeline is starting...",
+            "stopping_pipeline": "Server pipeline is stopping...",
             "conn_shutdown": "Connection has been shut down.",
             "translator_initializing": "Translation engine is initializing...",
             "translator_initialized": "Translation engine initialized.",

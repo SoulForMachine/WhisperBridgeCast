@@ -25,8 +25,7 @@ class WhisperServer:
         self.client_socket = None
         self.warmup_file = warmup_file
         self.pipeline = None
-        self.pipeline_ready = False
-        self.pipeline_starting = False
+        self.pipeline_state = "stopped"  # stopped | starting | ready | stopping
         self.pipeline_lock = threading.Lock()
         self.client_sender_queue = None
         self.client_sender_queue_lock = threading.Lock()
@@ -40,15 +39,21 @@ class WhisperServer:
         if self.is_running:
             self.is_stopping = True
 
-            if self.listen_socket:
+            if self.listen_socket is not None:
                 self._close_socket(self.listen_socket)
 
-            if self.client_socket:
+            if self.client_socket is not None:
                 self._close_socket(self.client_socket)
 
-            if self.server_thread:
+            if self.server_thread is not None:
                 self.server_thread.join()
                 self.server_thread = None
+
+            with self.pipeline_lock:
+                startup_thread = self.pipeline_start_thread
+
+            if startup_thread is not None:
+                startup_thread.join()
 
             self._stop_pipeline()
 
@@ -91,12 +96,13 @@ class WhisperServer:
             # Inform the client about the current server state.
             client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
             with self.pipeline_lock:
-                pipeline_ready = self.pipeline_ready
-                pipeline_starting = self.pipeline_starting
-            if pipeline_ready:
+                pipeline_state = self.pipeline_state
+            if pipeline_state == "ready":
                 client_sender_queue.put({"type": "status", "value": {"status": "ready"}})
-            elif pipeline_starting:
+            elif pipeline_state == "starting":
                 client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
+            elif pipeline_state == "stopping":
+                client_sender_queue.put({"type": "status", "value": {"status": "stopping_pipeline"}})
 
             # Receive audio chunks and control messages.
             while True:
@@ -111,9 +117,9 @@ class WhisperServer:
 
                     with self.pipeline_lock:
                         pipeline = self.pipeline
-                        pipeline_ready = self.pipeline_ready
+                        pipeline_state = self.pipeline_state
 
-                    if pipeline is not None and pipeline_ready:
+                    if pipeline is not None and pipeline_state == "ready":
                         pipeline.process(msg)
 
                 elif msg_type == "json":
@@ -127,7 +133,7 @@ class WhisperServer:
                                     continue
 
                                 with self.pipeline_lock:
-                                    can_start = self.pipeline is None and not self.pipeline_starting
+                                    can_start = self.pipeline_state == "stopped" and self.pipeline is None
 
                                 if can_start:
                                     import json
@@ -138,23 +144,23 @@ class WhisperServer:
 
                             case "stop_pipeline":
                                 with self.pipeline_lock:
-                                    pipeline_ready = self.pipeline_ready
-                                if pipeline_ready:
+                                    pipeline_state = self.pipeline_state
+                                if pipeline_state == "ready":
                                     self._stop_pipeline()
                                     client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
 
                             case "start_sending_client_transcript":
                                 with self.pipeline_lock:
                                     pipeline = self.pipeline
-                                    pipeline_ready = self.pipeline_ready
-                                if pipeline is not None and pipeline_ready:
+                                    pipeline_state = self.pipeline_state
+                                if pipeline is not None and pipeline_state == "ready":
                                     pipeline.start_sending_client_transcript()
 
                             case "stop_sending_client_transcript":
                                 with self.pipeline_lock:
                                     pipeline = self.pipeline
-                                    pipeline_ready = self.pipeline_ready
-                                if pipeline is not None and pipeline_ready:
+                                    pipeline_state = self.pipeline_state
+                                if pipeline is not None and pipeline_state == "ready":
                                     pipeline.stop_sending_client_transcript()
 
                             case "stop":
@@ -183,18 +189,18 @@ class WhisperServer:
 
     def _start_pipeline_async(self, pipeline_settings: PipelineSettings):
         with self.pipeline_lock:
-            if self.pipeline is not None or self.pipeline_starting:
+            if self.pipeline is not None or self.pipeline_state != "stopped":
                 return
 
-            self.pipeline_starting = True
-            self.pipeline_ready = False
+            self.pipeline_state = "starting"
             self.pipeline_start_thread = threading.Thread(
                 target=self._start_pipeline,
                 args=(pipeline_settings,),
                 daemon=True,
             )
             self.pipeline_start_thread.start()
-            self.client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
+
+        self._send_to_client({"type": "status", "value": {"status": "starting_pipeline"}})
 
     def _start_pipeline(self, pipeline_settings: PipelineSettings):
         if self.warmup_file:
@@ -205,25 +211,29 @@ class WhisperServer:
 
         with self.pipeline_lock:
             self.pipeline = pipeline
-            self.pipeline_ready = True
-            self.pipeline_starting = False
+            self.pipeline_state = "ready"
             self.pipeline_start_thread = None
 
         self._send_to_client({"type": "status", "value": {"status": "ready"}})
 
     def _stop_pipeline(self):
+        should_notify_stopping = False
         with self.pipeline_lock:
-            startup_thread = self.pipeline_start_thread
-            self.pipeline_ready = False
-            self.pipeline_starting = False
+            current_state = self.pipeline_state
+            if current_state == "stopped":
+                return
+            if current_state != "stopping":
+                should_notify_stopping = True
+            self.pipeline_state = "stopping"
 
-        if startup_thread is not None and startup_thread.is_alive():
-            startup_thread.join()
+        if should_notify_stopping:
+            self._send_to_client({"type": "status", "value": {"status": "stopping_pipeline"}})
 
         with self.pipeline_lock:
             pipeline = self.pipeline
             self.pipeline = None
-            self.pipeline_ready = False
+            self.pipeline_start_thread = None
+            self.pipeline_state = "stopped"
 
         if pipeline is not None:
             pipeline.stop()

@@ -68,9 +68,9 @@ x Try out googletrans and deep_traslator libraries for free online translation s
 x Allow for the client to dynamically adjust the audio chunk size, or use smaller chunks and adjust the minimal asr processor chunk size.
 x Allow the user to enable/disable original language transcript in web server.
 x (solved with VAC improvements) Add padding from the next audio chunk if necessary for requested length.
-- Starting the server pipeline separatly from UI.
+x Starting the server pipeline separatly from UI.
 - After connection is established, server should send to client all available ASR and translation backends info: engine, models, online service, supported languages, needed parameters...
-- The client should be able to send updated individual settings or restart parts of the server pipeline.
+= The client should be able to send updated individual settings or restart parts of the server pipeline.
 - Use slower but better translation in a second pass? This would be done with an LLM.
 - Research the posibility of asynchronous transcription inference.
 - Send sentence audio timestamp to all consumers.

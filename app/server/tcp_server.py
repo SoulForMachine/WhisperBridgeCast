@@ -29,60 +29,89 @@ class WhisperServer:
         self.pipeline_lock = threading.Lock()
         self.client_sender_queue = None
         self.client_sender_queue_lock = threading.Lock()
+        self.lifecycle_lock = threading.Lock()
 
     def start(self):
-        if not self.is_running:
-            self.server_thread = threading.Thread(target=self.run)
-            self.server_thread.start()
+        with self.lifecycle_lock:
+            if self.is_running:
+                return
+
+            self.is_running = True
+            self.is_stopping = False
+            self.server_thread = threading.Thread(target=self._run)
+            server_thread = self.server_thread
+
+        server_thread.start()
 
     def stop(self):
-        if self.is_running:
+        with self.lifecycle_lock:
+            if not self.is_running:
+                return
+
             self.is_stopping = True
+            server_thread = self.server_thread
+            listen_socket = self.listen_socket
+            client_socket = self.client_socket
 
-            if self.listen_socket is not None:
-                self._close_socket(self.listen_socket)
+        if listen_socket is not None:
+            self._close_socket(listen_socket)
 
-            if self.client_socket is not None:
-                self._close_socket(self.client_socket)
+        if client_socket is not None:
+            self._close_socket(client_socket)
 
-            if self.server_thread is not None:
-                self.server_thread.join()
-                self.server_thread = None
+        if server_thread is not None:
+            server_thread.join()
 
-            with self.pipeline_lock:
-                startup_thread = self.pipeline_start_thread
+        with self.pipeline_lock:
+            startup_thread = self.pipeline_start_thread
+            self.pipeline_start_thread = None
 
-            if startup_thread is not None:
-                startup_thread.join()
+        if startup_thread is not None:
+            startup_thread.join()
 
-            self._stop_pipeline()
+        self._stop_pipeline()
 
+        with self.lifecycle_lock:
+            self.server_thread = None
             self.listen_socket = None
             self.client_socket = None
             self.is_stopping = False
+            self.is_running = False
 
-    def run(self):
-        self.is_running = True
-        self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listen_socket.bind((self.host, self.port))
-        self.listen_socket.listen(1)
+    def _run(self):
+        listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        with self.lifecycle_lock:
+            self.listen_socket = listen_socket
 
         try:
-            while not self.is_stopping:
+            listen_socket.bind((self.host, self.port))
+            listen_socket.listen(1)
+
+            while True:
+                with self.lifecycle_lock:
+                    if self.is_stopping:
+                        break
+
                 logger.info(f"Server listening on {self.host}:{self.port}")
-                self.client_socket, addr = self.listen_socket.accept()
+                client_socket, addr = listen_socket.accept()
+                with self.lifecycle_lock:
+                    self.client_socket = client_socket
                 logger.info(f"Connected by {addr}")
-                self.handle_client(self.client_socket)
-                self.client_socket = None
+                self._handle_client(client_socket)
+                with self.lifecycle_lock:
+                    self.client_socket = None
         except Exception as e:
             if not self.is_stopping:
                 logger.error(f"Server error: {e}")
         finally:
             logger.info("Server shutting down.")
-            self._close_socket(self.listen_socket)
-            self.is_running = False
+            self._close_socket(listen_socket)
+            with self.lifecycle_lock:
+                if self.listen_socket is listen_socket:
+                    self.listen_socket = None
+                self.is_running = False
 
-    def handle_client(self, conn: socket.socket):
+    def _handle_client(self, conn: socket.socket):
         client_sender_queue = queue.Queue()
         sender_thread = None
 
@@ -90,7 +119,7 @@ class WhisperServer:
             with self.client_sender_queue_lock:
                 self.client_sender_queue = client_sender_queue
 
-            sender_thread = threading.Thread(target=self.sender_thread_func, args=(conn, client_sender_queue))
+            sender_thread = threading.Thread(target=self._sender_thread_func, args=(conn, client_sender_queue))
             sender_thread.start()
 
             # Inform the client about the current server state.
@@ -217,26 +246,19 @@ class WhisperServer:
         self._send_to_client({"type": "status", "value": {"status": "ready"}})
 
     def _stop_pipeline(self):
-        should_notify_stopping = False
         with self.pipeline_lock:
-            current_state = self.pipeline_state
-            if current_state == "stopped":
+            if self.pipeline_state == "stopped" or self.pipeline is None:
                 return
-            if current_state != "stopping":
-                should_notify_stopping = True
+
             self.pipeline_state = "stopping"
-
-        if should_notify_stopping:
-            self._send_to_client({"type": "status", "value": {"status": "stopping_pipeline"}})
-
-        with self.pipeline_lock:
             pipeline = self.pipeline
             self.pipeline = None
-            self.pipeline_start_thread = None
-            self.pipeline_state = "stopped"
 
-        if pipeline is not None:
-            pipeline.stop()
+        self._send_to_client({"type": "status", "value": {"status": "stopping_pipeline"}})
+        pipeline.stop()
+
+        with self.pipeline_lock:
+            self.pipeline_state = "stopped"
 
     def _send_to_client(self, message: dict):
         with self.client_sender_queue_lock:
@@ -245,7 +267,7 @@ class WhisperServer:
         if sender_queue is not None:
             sender_queue.put(message)
 
-    def sender_thread_func(self, conn: socket.socket, sender_queue: queue.Queue):
+    def _sender_thread_func(self, conn: socket.socket, sender_queue: queue.Queue):
         try:
             while True:
                 msg = sender_queue.get()

@@ -31,6 +31,7 @@ x Add a status display in the GUI for client-server connection, audio device sta
 ## Bugs
 x listen_for_results stop_event logic sometimes makes it exit early
 x MME driver on Windows cuts off device names (~31 chars I think), so reported as separate in the list.
+- Client connected while WhisperPipeline is starting isn't notified of current pipeline components states.
 
 ## UI
 

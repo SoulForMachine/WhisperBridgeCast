@@ -6,16 +6,25 @@ class SettingsDeltaTracker:
         self.settings = None
         self.value_transforms = {}
 
-    def bind_settings_to_vars(self, settings, tk_vars_obj, var_prefix="", var_postfix="", value_transforms=None):
+    def bind_settings_to_vars(self, settings, tk_vars_obj, var_prefix="", var_postfix="", value_transforms=None, on_change_callback=None):
         self.settings = settings
         self.tk_vars_obj = tk_vars_obj
         self.var_prefix = var_prefix
         self.var_postfix = var_postfix
         self.value_transforms = value_transforms or {}
+        self.on_change_callback = on_change_callback
         self._bind_recursive(settings)
 
     def clear_delta(self):
         self.pl_set_delta = {}
+        if getattr(self, "on_change_callback", None):
+            self.on_change_callback(False)
+
+    def get_delta(self):
+        return self.pl_set_delta
+    
+    def has_delta(self):
+        return len(self.pl_set_delta) > 0
 
     def _get_value_by_path(self, obj, path):
         cur = obj
@@ -88,6 +97,9 @@ class SettingsDeltaTracker:
                 self._remove_delta_path(path)
             else:
                 self._set_delta_path(path, new_value)
+
+            if getattr(self, "on_change_callback", None):
+                self.on_change_callback(len(self.pl_set_delta) > 0)
 
         return write_callback
 

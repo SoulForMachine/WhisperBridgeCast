@@ -124,14 +124,17 @@ class WhisperServer:
 
             # Inform the client about the current server state.
             client_sender_queue.put({"type": "status", "value": {"status": "connected"}})
+
             with self.pipeline_lock:
                 pipeline_state = self.pipeline_state
-            if pipeline_state == "ready":
-                client_sender_queue.put({"type": "status", "value": {"status": "ready"}})
-            elif pipeline_state == "starting":
-                client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
-            elif pipeline_state == "stopping":
-                client_sender_queue.put({"type": "status", "value": {"status": "stopping_pipeline"}})
+
+            match pipeline_state:
+                case "ready":
+                    client_sender_queue.put({"type": "status", "value": {"status": "ready"}})
+                case "starting":
+                    client_sender_queue.put({"type": "status", "value": {"status": "starting_pipeline"}})
+                case "stopping":
+                    client_sender_queue.put({"type": "status", "value": {"status": "stopping_pipeline"}})
 
             # Receive audio chunks and control messages.
             while True:

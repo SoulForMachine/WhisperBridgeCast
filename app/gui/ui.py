@@ -686,13 +686,16 @@ class CaptionerUI:
         # --- Buttons ---
         row_idx = self.next_row()
         buttons_frame = ttk.Frame(root)
-        buttons_frame.grid(row=row_idx, column=0, columnspan=3, sticky="e", padx=5, pady=5)
+        buttons_frame.grid(row=row_idx, column=0, columnspan=3, sticky="we", padx=5, pady=5)
 
-        self.restore_defaults_btn = ttk.Button(buttons_frame, text="Restore defaults", command=self.on_restore_defaults)
-        self.restore_defaults_btn.grid(row=0, column=2, sticky="e", padx=5, pady=5)
+        self.apply_settings_btn = ttk.Button(buttons_frame, text="Update pipeline", command=self.on_apply_settings, state="disabled")
+        self.apply_settings_btn.pack(side="left", padx=5, pady=5)
 
         self.quit_btn = ttk.Button(buttons_frame, text="Quit", command=self.quit)
-        self.quit_btn.grid(row=0, column=3, sticky="e", padx=5, pady=5)
+        self.quit_btn.pack(side="right", padx=5, pady=5)
+
+        self.restore_defaults_btn = ttk.Button(buttons_frame, text="Restore defaults", command=self.on_restore_defaults)
+        self.restore_defaults_btn.pack(side="right", padx=5, pady=5)
 
         root.protocol("WM_DELETE_WINDOW", self.quit)
 
@@ -710,8 +713,45 @@ class CaptionerUI:
             tk_vars_obj=self,
             var_prefix="pl_",
             var_postfix="_var",
-            value_transforms=value_transforms
+            value_transforms=value_transforms,
+            on_change_callback=self.on_settings_dirty
         )
+
+    def on_settings_dirty(self, is_dirty: bool):
+        self.update_apply_settings_button_state(is_dirty)
+
+    def update_apply_settings_button_state(self, is_dirty: bool | None = None):
+        if is_dirty is None:
+            is_dirty = self.pl_settings_tracker.has_delta()
+
+        state = "normal" if (
+            is_dirty
+            and self.is_connected_to_server
+            and self.is_pipeline_ready
+        ) else "disabled"
+        self.apply_settings_btn.config(state=state)
+
+    def on_apply_settings(self):
+        delta = self.pl_settings_tracker.get_delta()
+        if not delta:
+            return
+
+        settings = self.collect_validated_server_settings_from_ui()
+        if not settings:
+            return
+
+        self.pipeline_settings = settings
+        self.save_settings_to_file()
+
+        self.pl_settings_tracker.clear_delta()
+        self.update_apply_settings_button_state(False)
+
+        if self.is_pipeline_ready and self.is_connected_to_server:
+            self.net_send_queue.put({
+                "type": "control",
+                "command": "update_pipeline",
+                "settings": delta
+            })
 
     def show_modal_message(self, title, message, parent, confirm=False):
         # Create a modal Toplevel window
@@ -1033,6 +1073,11 @@ class CaptionerUI:
             state = "normal" if self.is_connected_to_server and self.is_pipeline_ready else "disabled"
             self.record_btn.config(state=state, text="Record")
 
+    def refresh_runtime_control_states(self):
+        self.update_pipeline_button_state()
+        self.update_record_button_state()
+        self.update_apply_settings_button_state()
+
     def update_pipeline_button_state(self):
         if not self.is_connected_to_server:
             self.pipeline_btn.config(state="disabled", text="Start pipeline")
@@ -1045,12 +1090,17 @@ class CaptionerUI:
         else:
             self.pipeline_btn.config(state="normal", text="Start pipeline")
 
+    def set_pipeline_state(self, *, ready: bool | None = None, starting: bool | None = None, stopping: bool | None = None):
+        if ready is not None:
+            self.is_pipeline_ready = ready
+        if starting is not None:
+            self.is_pipeline_starting = starting
+        if stopping is not None:
+            self.is_pipeline_stopping = stopping
+        self.refresh_runtime_control_states()
+
     def set_pipeline_ready_state(self, is_ready: bool):
-        self.is_pipeline_ready = is_ready
-        self.is_pipeline_starting = False
-        self.is_pipeline_stopping = False
-        self.update_pipeline_button_state()
-        self.update_record_button_state()
+        self.set_pipeline_state(ready=is_ready, starting=False, stopping=False)
 
     def toggle_mute(self):
         if self.audio_producer:
@@ -1094,10 +1144,7 @@ class CaptionerUI:
             self.stop_whisper_client()
             self.connect_btn.config(state="normal", text="Connect")
             self.is_connected_to_server = False
-            self.is_pipeline_starting = False
-            self.is_pipeline_stopping = False
-            self.set_pipeline_ready_state(False)
-            self.update_record_button_state()
+            self.set_pipeline_state(ready=False, starting=False, stopping=False)
 
     def on_start_pipeline(self):
         if not self.is_connected_to_server or self.is_pipeline_ready or self.is_pipeline_starting or self.is_pipeline_stopping:
@@ -1111,15 +1158,13 @@ class CaptionerUI:
         self.client_settings = self.collect_client_settings_from_ui()
         self.save_settings_to_file()
 
-        self.is_pipeline_starting = True
-        self.is_pipeline_stopping = False
-        self.update_pipeline_button_state()
-        self.update_record_button_state()
+        self.set_pipeline_state(ready=False, starting=True, stopping=False)
         self.net_server_status_label.config(text="starting pipeline...")
         self.net_server_asr_status_indicator.set_state("uninitialized")
         self.net_server_transl_status_indicator.set_state("uninitialized")
         self.clear_net_server_stats(keep_status=True)
         self.stats = Stats()
+        self.pl_settings_tracker.clear_delta()
         self.net_send_queue.put({
             "type": "control",
             "command": "start_pipeline",
@@ -1131,11 +1176,7 @@ class CaptionerUI:
             return
 
         self.on_stop_recording()
-        self.is_pipeline_starting = False
-        self.is_pipeline_stopping = True
-        self.is_pipeline_ready = False
-        self.update_pipeline_button_state()
-        self.update_record_button_state()
+        self.set_pipeline_state(ready=False, starting=False, stopping=True)
         self.net_server_status_label.config(text="stopping pipeline...")
         self.net_send_queue.put({
             "type": "control",
@@ -1473,9 +1514,6 @@ class CaptionerUI:
             logger.error(f"Invalid port number: {port}.")
             return False
 
-        self.client_settings = self.collect_client_settings_from_ui()
-        self.save_settings_to_file()
-
         logger.info(f"Connecting to server {server_url}:{port}")
 
         self.net_send_queue = queue.Queue()
@@ -1661,9 +1699,7 @@ class CaptionerUI:
                     case "connecting":
                         def on_connecting():
                             self.net_server_status_label.config(text="connecting")
-                            self.is_pipeline_starting = False
-                            self.is_pipeline_stopping = False
-                            self.set_pipeline_ready_state(False)
+                            self.set_pipeline_state(ready=False, starting=False, stopping=False)
                         self.gui_queue.put(on_connecting)
                     case "connected":
                         def on_connected():
@@ -1671,8 +1707,7 @@ class CaptionerUI:
                             self.connect_btn.config(text="Disconnect", state="normal")
                             self.stats = Stats()
                             self.net_server_status_indicator.set_state("connected")
-                            self.update_pipeline_button_state()
-                            self.update_record_button_state()
+                            self.refresh_runtime_control_states()
                         self.gui_queue.put(on_connected)
                     case "conn_lost" | "params_send_error":
                         self.gui_queue.put(on_disconnect_from_server)
@@ -1681,9 +1716,7 @@ class CaptionerUI:
                             self.stop_whisper_client()
                             self.connect_btn.config(text="Connect", state="normal")
                             self.is_connected_to_server = False
-                            self.is_pipeline_starting = False
-                            self.is_pipeline_stopping = False
-                            self.set_pipeline_ready_state(False)
+                            self.set_pipeline_state(ready=False, starting=False, stopping=False)
                             self.net_server_status_label.config(text="disconnected")
                             self.net_server_status_indicator.set_state("disconnected")
                             self.net_server_asr_status_indicator.set_state("uninitialized")
@@ -1699,10 +1732,7 @@ class CaptionerUI:
                 match data.get("status", ""):
                     case "starting_pipeline":
                         def on_starting_pipeline():
-                            self.set_pipeline_ready_state(False)
-                            self.is_pipeline_starting = True
-                            self.is_pipeline_stopping = False
-                            self.update_pipeline_button_state()
+                            self.set_pipeline_state(ready=False, starting=True, stopping=False)
                             self.net_server_status_label.config(text="starting pipeline")
                             self.net_server_asr_status_indicator.set_state("initializing")
                             self.net_server_transl_status_indicator.set_state("initializing")
@@ -1711,17 +1741,12 @@ class CaptionerUI:
                         self.gui_queue.put(on_starting_pipeline)
                     case "stopping_pipeline":
                         def on_stopping_pipeline():
-                            self.is_pipeline_ready = False
-                            self.is_pipeline_starting = False
-                            self.is_pipeline_stopping = True
-                            self.update_pipeline_button_state()
-                            self.update_record_button_state()
+                            self.set_pipeline_state(ready=False, starting=False, stopping=True)
                             self.net_server_status_label.config(text="stopping pipeline")
                         self.gui_queue.put(on_stopping_pipeline)
                     case "connected":
                         def on_server_connected():
-                            self.set_pipeline_ready_state(False)
-                            self.is_pipeline_stopping = False
+                            self.set_pipeline_state(ready=False, starting=False, stopping=False)
                             self.net_server_status_label.config(text="connected")
                             self.net_server_asr_status_indicator.set_state("uninitialized")
                             self.net_server_transl_status_indicator.set_state("uninitialized")
@@ -1732,7 +1757,7 @@ class CaptionerUI:
                         def on_ready():
                             if self.stats is None:
                                 self.stats = Stats()
-                            self.set_pipeline_ready_state(True)
+                            self.set_pipeline_state(ready=True, starting=False, stopping=False)
                             self.net_server_status_label.config(text="ready")
                             self.net_server_asr_status_indicator.set_state("ready")
                             self.net_server_transl_status_indicator.set_state("ready")

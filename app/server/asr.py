@@ -141,6 +141,20 @@ def asr_subprocess_main(
             chunk = audio_queue.get()
             if chunk is None:
                 break
+                
+            if isinstance(chunk, dict) and chunk.get("type") == "update_vac_settings":
+                vac_settings = chunk["vac"]
+                if hasattr(whisper_online.asr_proc, "vac") and whisper_online.asr_proc.vac is not None:
+                    whisper_online.asr_proc.vac.start_threshold = vac_settings.start_threshold
+                    whisper_online.asr_proc.vac.end_threshold = vac_settings.end_threshold
+                    whisper_online.asr_proc.vac.min_silence_samples = whisper_online.asr_proc.vac.sampling_rate * vac_settings.min_silence_duration_ms / 1000
+                    whisper_online.asr_proc.vac.speech_pad_start_samples = whisper_online.asr_proc.vac.sampling_rate * vac_settings.speech_pad_start_ms / 1000
+                    whisper_online.asr_proc.vac.speech_pad_end_samples = whisper_online.asr_proc.vac.sampling_rate * vac_settings.speech_pad_end_ms / 1000
+                    whisper_online.asr_proc.vac.hangover_chunks = vac_settings.hangover_chunks
+                    
+                whisper_online.asr_proc.online_chunk_size = vac_settings.min_chunk_size_s
+                whisper_online.asr_proc.is_dynamic_chunk_size = vac_settings.is_dynamic_chunk_size
+                continue
 
             sender_queue.put(
                 {

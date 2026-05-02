@@ -174,6 +174,26 @@ class WhisperServer:
                                     pipeline_settings = dataclass_from_dict(PipelineSettings, pipeline_payload)
                                     self._start_pipeline_async(pipeline_settings)
 
+                            case "update_pipeline":
+                                pipeline_payload = msg.get("settings")
+                                if pipeline_payload is None:
+                                    logger.error("Received update_pipeline without settings payload.")
+                                    continue
+
+                                with self.pipeline_lock:
+                                    pipeline_state = self.pipeline_state
+                                    pipeline = self.pipeline
+
+                                if pipeline is not None and pipeline_state == "ready":
+                                    import json
+
+                                    logger.info(f"Received updated pipeline settings:\n{json.dumps(pipeline_payload, indent=2)}")
+                                    pipeline_settings = dataclass_from_dict(PipelineSettings, pipeline_payload)
+                                    # Since updating might require restart we do it async or handle it inside tcp_server.
+                                    # We can put logic in pipeline to update components or do it here.
+                                    # Actually, if we do it here:
+                                    threading.Thread(target=self._update_pipeline, args=(pipeline_settings,), daemon=True).start()
+
                             case "stop_pipeline":
                                 with self.pipeline_lock:
                                     pipeline_state = self.pipeline_state
@@ -262,6 +282,13 @@ class WhisperServer:
 
         with self.pipeline_lock:
             self.pipeline_state = "stopped"
+
+    def _update_pipeline(self, pipeline_settings: PipelineSettings):
+        with self.pipeline_lock:
+            pipeline = self.pipeline
+            pipeline_state = self.pipeline_state
+        if pipeline is not None and pipeline_state == "ready":
+            pipeline.update_settings(pipeline_settings)
 
     def _send_to_client(self, message: dict):
         with self.client_sender_queue_lock:

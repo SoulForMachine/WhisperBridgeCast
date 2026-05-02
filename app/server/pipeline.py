@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class WhisperPipeline:
     def __init__(self, pipeline_settings: PipelineSettings, sender_callback: Callable[[dict], None]):
+        self.pipeline_settings = pipeline_settings
         self.audio_queue = MPCountingQueue()
         self.asr_queue = MPCountingQueue()
         self.websrv_input_queue = queue.Queue()
@@ -146,4 +147,73 @@ class WhisperPipeline:
                 return False
         return True
 
-__all__ = ["WhisperPipeline"]
+    def update_settings(self, new_settings: PipelineSettings):
+        old_settings = self.pipeline_settings
+        self.pipeline_settings = new_settings
+
+        # 1. Check if ASR needs restart
+        asr_needs_restart = False
+        if old_settings.asr != new_settings.asr:
+            asr_needs_restart = True
+        
+        # Check VAC Restart requirements
+        if old_settings.vac.enable != new_settings.vac.enable or \
+           old_settings.vac.enable_whisper_internal_vad != new_settings.vac.enable_whisper_internal_vad:
+            asr_needs_restart = True
+
+        if asr_needs_restart:
+            logger.info("Restarting ASR processor due to settings update...")
+            self.asr_proc.stop()
+            self.asr_proc = ASRProcessor(
+                new_settings,
+                self.audio_queue,
+                self.asr_queue,
+                self.asr_sender_queue
+            )
+            self.asr_proc.start()
+            self.asr_proc.wait_until_ready()
+        elif old_settings.vac != new_settings.vac:
+            logger.info("Updating VAC settings on the fly...")
+            self.audio_queue.put({"type": "update_vac_settings", "vac": new_settings.vac})
+
+        # 2. Check if Translator needs restart
+        translator_needs_restart = False
+        old_trans = old_settings.translation
+        new_trans = new_settings.translation
+
+        if (old_trans.enable != new_trans.enable or
+            old_trans.src_language != new_trans.src_language or
+            old_trans.target_language != new_trans.target_language or
+            old_trans.engine != new_trans.engine or
+            old_trans.engine_params != new_trans.engine_params or
+            old_trans.word_increment != new_trans.word_increment):
+            translator_needs_restart = True
+        
+        if translator_needs_restart:
+            logger.info("Restarting Translator thread due to settings update...")
+            output_queues = self.translator.output_queues
+            self.translator.stop()
+            self.translator = Translator(
+                new_settings.translation,
+                self.asr_queue,
+                output_queues,
+                self.sender_callback,
+                only_complete_sent=bool(new_settings.zoom_url)
+            )
+            self.translator.start()
+            self.translator.wait_until_ready()
+        elif old_trans.source_diff_enabled != new_trans.source_diff_enabled or old_trans.target_diff_enabled != new_trans.target_diff_enabled:
+            logger.info("Updating Translation settings on the fly...")
+            self.translator.source_diff_enabled = new_settings.translation.source_diff_enabled
+            self.translator.target_diff_enabled = new_settings.translation.target_diff_enabled
+
+        # 3. Zoom URL updates
+        old_zoom = old_settings.zoom_url
+        new_zoom = new_settings.zoom_url
+        if old_zoom != new_zoom:
+            if old_zoom:
+                self.stop_sending_zoom_transcript()
+            if new_zoom:
+                self.start_sending_zoom_transcript(new_zoom)
+                
+            self.translator.only_complete_sent = bool(new_zoom)
